@@ -1,0 +1,1 @@
+print("localmem-mcp stub")
