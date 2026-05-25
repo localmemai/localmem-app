@@ -12,18 +12,31 @@ Each step has:
 
 ## Phase 0 — Setup & Verification
 
-### Step 0.1 — Confirm your toolchain
-**Goal:** Make sure Swift 6+ and Xcode command-line tools are installed.
+### Step 0.1 — Install full Xcode (not just Command Line Tools)
+**Goal:** Get the complete Apple toolchain: Swift 6+, the macOS 26 SDK, **XCTest**, the iOS Simulator (for any future companion app), and the codesigning tools you'll need to ship the eventual desktop app.
 
+**Why full Xcode, not CLT:** Command Line Tools ships the compiler and SwiftPM but excludes XCTest, the Swift Testing framework, Instruments, and the build system that signs/notarizes apps. Since we'll need all of those eventually, install Xcode once up front.
+
+**Do:** Open the App Store to the Xcode page (free, ~10 GB):
+```bash
+open "macappstore://itunes.apple.com/app/id497799835"
+```
+
+After install completes, point the active developer directory at Xcode and accept the license + run first-launch setup:
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+sudo xcodebuild -runFirstLaunch
+```
+
+### Step 0.2 — Confirm the toolchain
 **Do:**
 ```bash
 swift --version
 xcode-select -p
 ```
 
-**Verify:** You should see something like `Swift version 6.x` and a path like `/Applications/Xcode.app/Contents/Developer`. If `xcode-select -p` errors, run `xcode-select --install`.
-
-**Why:** SwiftPM, the compiler, and the system SDKs all come from Xcode (or the standalone Command Line Tools). We need the toolchain that supports macOS 26 (Tahoe).
+**Verify:** You should see something like `Swift version 6.x`, target `arm64-apple-macosx26.0`, and a path like `/Applications/Xcode.app/Contents/Developer` (the full Xcode path, *not* `/Library/Developer/CommandLineTools`).
 
 ---
 
@@ -464,7 +477,9 @@ public enum MemoryStoreError: Error {
 // MARK: - Date formatting
 
 enum DateFormat {
-    static let iso8601: ISO8601DateFormatter = {
+    // ISO8601DateFormatter is documented thread-safe; we never mutate after init.
+    // `nonisolated(unsafe)` opts out of Swift 6's static-storage Sendable check.
+    nonisolated(unsafe) static let iso8601: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
@@ -472,25 +487,32 @@ enum DateFormat {
 }
 ```
 
-**Verify:** `swift build` succeeds. If you get GRDB compiler errors complaining about Sendable closures, add `@unchecked Sendable` to `MemoryStore` temporarily — newer GRDB versions are fully Sendable-clean but exact wording may differ.
+**Verify:** `swift build` succeeds. Two Swift 6 gotchas you may hit:
+
+- *"static property 'iso8601' is not concurrency-safe"* — that's what the `nonisolated(unsafe)` above prevents. If you forget it, the compiler suggests `@MainActor` (don't — that forces date formatting onto the main thread).
+- *GRDB closure Sendable warnings* — newer GRDB versions are Sendable-clean. If your version isn't, temporarily mark `MemoryStore` as `@unchecked Sendable`.
 
 ### Step 2.5 — Write a test
-**Goal:** Prove `add` → `recent` → `search` works end-to-end against a real SQLite database.
+**Goal:** Prove `add` → `recent` → `search` → `get` works end-to-end against a real SQLite database.
+
+**Why Swift Testing instead of XCTest:** Swift Testing is Apple's modern test framework, official since Xcode 16 (Sept 2024). It uses macros (`@Test`, `#expect`) so failures show the actual expression instead of generic matcher names, runs tests in parallel by default, and works with structs (no `XCTestCase` subclassing). XCTest is in maintenance mode for new code. Full Xcode ships both — we pick the modern one.
 
 **Do:** Create `Tests/LocalMemCoreTests/MemoryStoreTests.swift`:
 
 ```swift
-import XCTest
+import Testing
+import Foundation
 @testable import LocalMemCore
 
-final class MemoryStoreTests: XCTestCase {
+@Suite("MemoryStore")
+struct MemoryStoreTests {
     func makeStore() throws -> (MemoryStore, URL) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".sqlite3")
         return (try MemoryStore(databaseURL: tmp), tmp)
     }
 
-    func testAddAndRecent() async throws {
+    @Test func addAndRecent() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -498,11 +520,11 @@ final class MemoryStoreTests: XCTestCase {
         _ = try await store.add(content: "Second memory", type: .note, source: .user)
 
         let recent = try await store.recent(limit: 10)
-        XCTAssertEqual(recent.count, 2)
-        XCTAssertEqual(recent.first?.content, "Second memory")
+        #expect(recent.count == 2)
+        #expect(recent.first?.content == "Second memory")
     }
 
-    func testSearchMatchesAndExcludes() async throws {
+    @Test func searchMatchesAndExcludes() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -510,11 +532,31 @@ final class MemoryStoreTests: XCTestCase {
         _ = try await store.add(content: "Dogs are loyal",          type: .note, source: .user)
 
         let hits = try await store.search(query: "cat")
-        XCTAssertEqual(hits.count, 1)
-        XCTAssertTrue(hits[0].content.contains("cat"))
+        #expect(hits.count == 1)
+        #expect(hits.first?.content.contains("cat") == true)
 
         let misses = try await store.search(query: "elephant")
-        XCTAssertTrue(misses.isEmpty)
+        #expect(misses.isEmpty)
+    }
+
+    @Test func getById() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(
+            content: "Coffee order: flat white, oat milk",
+            type: .preference,
+            title: "Coffee",
+            tags: ["coffee", "preferences"],
+            source: .user
+        )
+
+        let fetched = try await store.get(id: added.id)
+        #expect(fetched != nil)
+        #expect(fetched?.content == added.content)
+        #expect(fetched?.title == "Coffee")
+        #expect(fetched?.type == .preference)
+        #expect(Set(fetched?.tags ?? []) == ["coffee", "preferences"])
     }
 }
 ```
@@ -524,7 +566,7 @@ final class MemoryStoreTests: XCTestCase {
 swift test
 ```
 
-**Verify:** Both tests pass. If they don't, the failure message tells you whether it's a schema issue (migration didn't run), a decoding issue (row → Memory mapping wrong), or a search issue (FTS query syntax).
+**Verify:** Three tests pass. If you see `Missing required module '_TestingInternals'` or `no such module 'Testing'`, you're running against Command Line Tools instead of full Xcode — re-run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` and retry.
 
 ---
 
