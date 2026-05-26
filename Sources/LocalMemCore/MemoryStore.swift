@@ -4,7 +4,16 @@ import GRDB
 public actor MemoryStore {
     private let dbQueue: DatabaseQueue
 
-    public init(databaseURL: URL) throws {
+    /// Opens the store at the default user-level database path
+    /// (`~/Library/Application Support/LocalMem/memory.sqlite3`).
+    /// This is the only init exposed to consumers — production code never
+    /// needs to choose a path. Tests reach the explicit-path init below via
+    /// `@testable import`.
+    public init() throws {
+        try self.init(databaseURL: Paths.databaseURL())
+    }
+
+    init(databaseURL: URL) throws {
         var config = Configuration()
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA journal_mode=WAL")
@@ -69,7 +78,7 @@ public actor MemoryStore {
         try await dbQueue.read { db in
             let ids = try String.fetchAll(
                 db,
-                sql: "SELECT id FROM memories ORDER BY created_at DESC LIMIT ?",
+                sql: "SELECT id FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 arguments: [limit]
             )
             return try ids.compactMap { try Self.fetchMemory(id: $0, in: db) }

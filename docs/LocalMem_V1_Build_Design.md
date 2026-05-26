@@ -7,8 +7,10 @@ This document covers the first shippable slice of LocalMem: a local SQLite-backe
 - Swift package with a reusable core (`LocalMemCore`)
 - Local SQLite store with FTS5 full-text search
 - MCP server exposing `memory_store`, `memory_search`, `memory_recent`
-- Read-only CLI: `list`, `search`, `show`
+- CLI: `list`, `search`, `show`, `add`, `path`
 - Claude Desktop registration
+
+> The CLI was initially scoped as read-only with all writes going through MCP. We later added `add` as a developer/scripting surface so the CLI can be exercised end-to-end before the MCP server lands, and to support automation use cases (cron jobs, import scripts). The mental model: **CLI is the developer/power-user surface; MCP is the agent surface.**
 
 ### Explicitly deferred
 - Encryption (vault key, CryptoKit, Keychain, biometric unlock)
@@ -39,7 +41,9 @@ localmem-app/
 │   │   └── Commands/
 │   │       ├── ListCommand.swift
 │   │       ├── SearchCommand.swift
-│   │       └── ShowCommand.swift
+│   │       ├── ShowCommand.swift
+│   │       ├── AddCommand.swift
+│   │       └── PathCommand.swift
 │   └── localmem-mcp/          # MCP server executable
 │       ├── main.swift
 │       └── Tools/

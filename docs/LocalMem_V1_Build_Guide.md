@@ -577,30 +577,33 @@ swift test
 
 **Why argument-parser:** Apple's official CLI framework. You declare commands as types conforming to `ParsableCommand`; the framework handles `--help`, validation, and error printing for free.
 
-**Do:** Replace `Sources/localmem/main.swift` with a small stub and add `Sources/localmem/LocalMemCLI.swift`:
+**Do:** Delete `Sources/localmem/main.swift` and create `Sources/localmem/LocalMemCLI.swift`:
 
-```swift
-// Sources/localmem/main.swift
-import ArgumentParser
-
-LocalMemCLI.main()
+```bash
+rm Sources/localmem/main.swift
 ```
 
 ```swift
 // Sources/localmem/LocalMemCLI.swift
 import ArgumentParser
-import Foundation
-import LocalMemCore
 
-struct LocalMemCLI: ParsableCommand {
+@main
+struct LocalMemCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "localmem",
         abstract: "Inspect LocalMem memories.",
-        subcommands: [ListCommand.self, SearchCommand.self, ShowCommand.self, PathCommand.self],
-        defaultSubcommand: ListCommand.self
+        subcommands: []
+        // Populated incrementally in steps 3.2–3.5.
     )
 }
 ```
+
+> **Why `@main` + `AsyncParsableCommand` (not `main.swift` + `ParsableCommand`):**
+> - All our subcommands need async/await (they call into `MemoryStore`, an actor). That means each subcommand must conform to `AsyncParsableCommand`, and the root must too — argument-parser refuses to mix sync and async at the same level.
+> - With `AsyncParsableCommand`, the `@main` attribute is the documented modern pattern. The older `main.swift + .main()` route works for sync commands but has a runtime quirk where it can fail to detect availability annotations, producing the error *"needs an availability annotation in order to be executed asynchronously"* even when one is present.
+> - `@main` makes the type's own static `main()` (synthesized by the framework) the program entry point. No separate file, no quirks.
+
+> We start with an empty `subcommands` list so the build stays green at every step. Each subcommand below ends with adding its own type to this array and (for `ListCommand`) setting `defaultSubcommand: ListCommand.self`.
 
 ### Step 3.2 — `list` command
 **Goal:** Print the most recent memories.
@@ -723,7 +726,74 @@ struct ShowCommand: AsyncParsableCommand {
 }
 ```
 
-### Step 3.5 — `path` command
+### Step 3.5 — `add` command (developer / scripting write surface)
+
+**Why we added this** after originally scoping the CLI as read-only: without it you can't exercise the CLI until the MCP server lands two phases later. `add` gives a tight dev loop today and stays useful long-term for cron jobs, import scripts, and power users. Mental model: **CLI is the developer/power-user surface; MCP is the agent surface.**
+
+**Do:** Create `Sources/localmem/Commands/AddCommand.swift`:
+
+```swift
+import ArgumentParser
+import Foundation
+import LocalMemCore
+
+struct AddCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "add",
+        abstract: "Add a memory to the local store."
+    )
+
+    @Argument(help: "The memory content.")
+    var content: String
+
+    @Option(help: "Memory type: fact, preference, decision, project, or note.")
+    var type: MemoryType = .note
+
+    @Option(help: "Optional title.")
+    var title: String?
+
+    @Option(name: .customLong("tag"), parsing: .singleValue,
+            help: "Add a tag. Repeat the flag for multiple tags.")
+    var tags: [String] = []
+
+    @Flag(help: "Emit JSON of the created memory.")
+    var json: Bool = false
+
+    func run() async throws {
+        let store = try MemoryStore()
+        let memory = try await store.add(
+            content: content,
+            type: type,
+            title: title,
+            tags: tags,
+            source: .user
+        )
+        if json {
+            try OutputFormatter.printJSON([memory])
+        } else {
+            OutputFormatter.printDetail(memory)
+        }
+    }
+}
+
+// Lets argument-parser accept `--type note` etc. directly.
+// MemoryType is String-backed, so the conformance is satisfied by default.
+extension MemoryType: ExpressibleByArgument {}
+```
+
+> **What's interesting about `--type`:** `MemoryType` is a `String`-backed `CaseIterable` enum. Conforming to `ExpressibleByArgument` (a one-line extension) lets argument-parser parse the raw string and — because the enum is `CaseIterable` — auto-generate the help text listing valid values. No manual `--help` strings to keep in sync with the enum.
+
+**Register it in `LocalMemCLI.swift`'s `subcommands` array.**
+
+**Verify:**
+```bash
+swift run localmem add "Coffee order: flat white, oat milk"
+swift run localmem list
+```
+
+You should see the new memory in the list. `localmem add --help` shows the auto-generated `values: fact, preference, ...` list for `--type`.
+
+### Step 3.6 — `path` command
 **Do:** Create `Sources/localmem/Commands/PathCommand.swift`:
 
 ```swift
@@ -742,7 +812,7 @@ struct PathCommand: ParsableCommand {
 }
 ```
 
-### Step 3.6 — Output formatter
+### Step 3.7 — Output formatter
 **Do:** Create `Sources/localmem/OutputFormatter.swift`:
 
 ```swift
@@ -792,7 +862,7 @@ enum OutputFormatter {
 }
 ```
 
-### Step 3.7 — Try the CLI
+### Step 3.8 — Try the CLI
 **Do:**
 ```bash
 swift run localmem list
