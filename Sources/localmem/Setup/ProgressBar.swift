@@ -31,4 +31,15 @@ enum ProgressBar {
         guard isTerminal else { return }
         FileHandle.standardOutput.write(Data("\r\u{001B}[K".utf8))
     }
+
+    /// Pure-ASCII spinner frames — rotates while a long step is running so the
+    /// user sees motion even when the bar itself is stuck at the same percentage.
+    static let spinnerFrames: [Character] = ["|", "/", "-", "\\"]
+
+    /// Draws the bar with a leading spinner character that advances per frame.
+    static func drawWithSpinner(current: Int, total: Int, label: String, frame: Int) {
+        guard isTerminal else { return }
+        let spinner = spinnerFrames[frame % spinnerFrames.count]
+        draw(current: current, total: total, label: "\(spinner) \(label)")
+    }
 }

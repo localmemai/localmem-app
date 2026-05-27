@@ -8,7 +8,7 @@ public enum Paths {
             appropriateFor: nil,
             create: true
         )
-        let dir = base.appendingPathComponent("LocalMem", isDirectory: true)
+        let dir = base.appendingPathComponent("Localmem", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

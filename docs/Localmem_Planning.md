@@ -1,9 +1,9 @@
-# LocalMem - Build Planning Document
+# Localmem - Build Planning Document
 
 ## Purpose
-This document defines how LocalMem should be built from the bottom up.
+This document defines how Localmem should be built from the bottom up.
 
-The goal is to validate the core utility of LocalMem with real agents before investing heavily in a polished macOS application shell.
+The goal is to validate the core utility of Localmem with real agents before investing heavily in a polished macOS application shell.
 
 ## Planning Principle
 Build the trusted memory and retrieval engine first.
@@ -13,7 +13,7 @@ Then prove that agents can use it well through MCP and CLI.
 Then build the desktop app that makes it understandable and usable for normal users.
 
 ## Why This Order
-LocalMem only matters if the core loop works:
+Localmem only matters if the core loop works:
 - store memory
 - retrieve relevant context
 - scope access correctly
@@ -71,7 +71,7 @@ CLI success criteria:
 Build the MCP server after the core and CLI are stable enough.
 
 Why:
-- this is the first real proof that LocalMem works with agents
+- this is the first real proof that Localmem works with agents
 - the MCP surface should be shaped by the core model, not by UI assumptions
 
 Initial MCP tools:
@@ -101,7 +101,7 @@ Questions to answer:
 - should memory and source retrieval remain separate
 - what access history is most useful to show
 
-This phase is critical because it validates the actual LocalMem loop with real usage.
+This phase is critical because it validates the actual Localmem loop with real usage.
 
 ### Phase 5 - macOS App
 After the engine and MCP loop feel strong, build the macOS app.
@@ -145,7 +145,7 @@ Recommended direction:
 - CLI sharing the same core services as the app and server
 
 ### Important Rule
-The app, CLI, and MCP server should all sit on top of the same LocalMem core.
+The app, CLI, and MCP server should all sit on top of the same Localmem core.
 
 This avoids:
 - duplicate logic
@@ -189,10 +189,10 @@ These may become important later, but they should not block validating the core 
 
 ## V1 Validation Goals
 The first serious milestone is not a beautiful app.
-It is proving that LocalMem is useful when connected to real agents.
+It is proving that Localmem is useful when connected to real agents.
 
 We should be able to answer:
-- can LocalMem store and retrieve useful memory
+- can Localmem store and retrieve useful memory
 - can it scope access correctly
 - can an agent use it without awkward prompting
 - can a user understand what happened afterward
@@ -246,7 +246,7 @@ We should be able to answer:
 - users feel safer than broad cloud connectors
 - users understand what was read by which agent
 - users can share only selected sources
-- LocalMem feels like a control layer, not hidden infrastructure
+- Localmem feels like a control layer, not hidden infrastructure
 
 ## Long-Term Extensions
 Future work can include:

@@ -1,4 +1,4 @@
-# LocalMem `setup` Subcommand - Step-by-Step Build Guide
+# Localmem `setup` Subcommand - Step-by-Step Build Guide
 
 A step-by-step guide for building `localmem setup` — a single command that detects every installed MCP client on the user's machine and registers `localmem-mcp` with each one, without the user ever editing a config file by hand.
 
@@ -9,7 +9,7 @@ Same format as the V1 build guide: each step has **Goal / Why / Do / Verify**.
 ```bash
 $ localmem setup
 
-LocalMem — installing MCP integration
+Localmem — installing MCP integration
 ========================================================
 ✓  Claude Code         registered (via CLI)
 ✓  Codex               registered (via config file)
@@ -671,7 +671,7 @@ struct SetupReport {
 
     func render() -> String {
         var lines: [String] = []
-        lines.append("LocalMem — installing MCP integration")
+        lines.append("Localmem — installing MCP integration")
         lines.append(String(repeating: "=", count: 56))
 
         var registered = 0, skipped = 0, failed = 0
@@ -730,7 +730,7 @@ private extension RegistrationOutcome.Strategy {
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct SetupCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -772,7 +772,7 @@ struct SetupCommand: ParsableCommand {
 ```
 
 ### Step 5.3 — Register `SetupCommand` with the root CLI
-**Do:** Edit `Sources/localmem/LocalMemCLI.swift`'s `subcommands` array to include `SetupCommand.self`:
+**Do:** Edit `Sources/localmem/LocalmemCLI.swift`'s `subcommands` array to include `SetupCommand.self`:
 
 ```swift
 subcommands: [
@@ -849,7 +849,7 @@ Then implement `isRegistered()` and `registeredBinaryPath()` in each concrete re
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct StatusCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -868,7 +868,7 @@ struct StatusCommand: AsyncParsableCommand {
         let fileSize = (try? FileManager.default
             .attributesOfItem(atPath: dbPath)[.size] as? Int) ?? 0
 
-        print("LocalMem Status")
+        print("Localmem Status")
         print(String(repeating: "=", count: 56))
         print("\nStore")
         print("  Database:    \(dbPath)")
@@ -906,10 +906,10 @@ struct StatusCommand: AsyncParsableCommand {
 }
 ```
 
-Register `StatusCommand.self` in `LocalMemCLI`'s subcommands array.
+Register `StatusCommand.self` in `LocalmemCLI`'s subcommands array.
 
 ### Step 6.3 — Update the V1 design doc
-**Goal:** Capture the multi-client install story in [docs/LocalMem_V1_Build_Design.md](LocalMem_V1_Build_Design.md). Add a section noting that `localmem setup` and `localmem status` are part of V1's CLI surface, and that LocalMem registers with Claude Code, Codex, Claude Desktop, Antigravity, and Cursor.
+**Goal:** Capture the multi-client install story in [docs/Localmem_V1_Build_Design.md](Localmem_V1_Build_Design.md). Add a section noting that `localmem setup` and `localmem status` are part of V1's CLI surface, and that Localmem registers with Claude Code, Codex, Claude Desktop, Antigravity, and Cursor.
 
 ---
 
@@ -917,7 +917,7 @@ Register `StatusCommand.self` in `LocalMemCLI`'s subcommands array.
 
 ```
 Sources/localmem/
-├── LocalMemCLI.swift
+├── LocalmemCLI.swift
 ├── OutputFormatter.swift
 ├── Commands/
 │   ├── ListCommand.swift

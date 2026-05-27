@@ -1,9 +1,9 @@
-# LocalMem - Technical Design Document v0.2
+# Localmem - Technical Design Document v0.2
 
 ## Technical Goals
 - Keep user memory local-first
 - Encrypt memory before any sync occurs
-- Avoid LocalMem-operated backend infrastructure in V1
+- Avoid Localmem-operated backend infrastructure in V1
 - Lean on Apple-native trust primitives such as biometrics, Keychain, Secure Enclave, and CryptoKit
 - Expose a clean adapter layer for AI clients, with Claude first
 - Keep the implementation simple enough to ship and validate quickly
@@ -15,7 +15,7 @@ Claude Desktop
     ↓ MCP
 Claude Adapter (Swift)
     ↓
-LocalMem Core (Swift package)
+Localmem Core (Swift package)
     ↓
 Encrypted Vault
     ↓
@@ -24,12 +24,12 @@ SQLite + FTS5
 Optional CloudKit Sync
 ```
 
-The CLI, MCP server, and macOS app are all thin surfaces over the same `LocalMemCore` Swift package. There is exactly one implementation of memory CRUD, search, permissions, and audit logging.
+The CLI, MCP server, and macOS app are all thin surfaces over the same `LocalmemCore` Swift package. There is exactly one implementation of memory CRUD, search, permissions, and audit logging.
 
 ## System Components
 
-### LocalMem Core
-A Swift package (`LocalMemCore`) that owns:
+### Localmem Core
+A Swift package (`LocalmemCore`) that owns:
 - memory CRUD
 - search
 - tagging
@@ -90,7 +90,7 @@ A Swift executable target in the same SwiftPM package as the core, built with `s
 ## Security Model
 
 ### Product Promise
-LocalMem should not require a LocalMem-operated server to access user plaintext in V1.
+Localmem should not require a Localmem-operated server to access user plaintext in V1.
 
 It should also provide better visibility and tighter access control than broad cloud connectors that expose an entire account or drive.
 
@@ -108,13 +108,13 @@ It should also provide better visibility and tighter access control than broad c
 ### Sync Privacy
 - Sync is optional.
 - If CloudKit sync is enabled, CloudKit should receive encrypted records, not plaintext memories.
-- LocalMem should define its own encrypted record format rather than making CloudKit the source of truth for the product model.
+- Localmem should define its own encrypted record format rather than making CloudKit the source of truth for the product model.
 
 ### Access Transparency
 - Every MCP request should be attributable to an agent or client.
 - Retrieval operations should produce an access log recording which source items were read.
 - Users should be able to inspect recent access history in the desktop app.
-- LocalMem should support revoking an agent's access without deleting the underlying user data.
+- Localmem should support revoking an agent's access without deleting the underlying user data.
 
 ## Data Model
 

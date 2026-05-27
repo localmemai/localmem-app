@@ -5,7 +5,7 @@ public actor MemoryStore {
     private let dbQueue: DatabaseQueue
 
     /// Opens the store at the default user-level database path
-    /// (`~/Library/Application Support/LocalMem/memory.sqlite3`).
+    /// (`~/Library/Application Support/Localmem/memory.sqlite3`).
     /// This is the only init exposed to consumers — production code never
     /// needs to choose a path. Tests reach the explicit-path init below via
     /// `@testable import`.

@@ -1,10 +1,10 @@
 import ArgumentParser
 
 @main
-struct LocalMemCLI: AsyncParsableCommand {
+struct LocalmemCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "localmem",
-        abstract: "Inspect LocalMem memories.",
+        abstract: "Inspect Localmem memories.",
         subcommands: [
             ListCommand.self,
             SearchCommand.self,

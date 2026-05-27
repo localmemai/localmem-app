@@ -1,6 +1,6 @@
-# LocalMem V1 - Step-by-Step Build Guide
+# Localmem V1 - Step-by-Step Build Guide
 
-A learning-oriented walkthrough that builds the V1 slice end-to-end: a SwiftPM package containing `LocalMemCore`, a `localmem` CLI, and a `localmem-mcp` server, plus Claude Desktop registration.
+A learning-oriented walkthrough that builds the V1 slice end-to-end: a SwiftPM package containing `LocalmemCore`, a `localmem` CLI, and a `localmem-mcp` server, plus Claude Desktop registration.
 
 Each step has:
 - **Goal** — what you're building
@@ -47,13 +47,13 @@ xcode-select -p
 
 **Do:** From `/Users/viditgupta/projects/localmem-app`:
 ```bash
-swift package init --type empty --name LocalMem
+swift package init --type empty --name Localmem
 ```
 
 This drops a minimal `Package.swift` next to your `docs/` folder. We'll rewrite it in the next step.
 
 ### Step 1.2 — Write `Package.swift`
-**Goal:** Declare one library target (`LocalMemCore`) and two executable targets (`localmem`, `localmem-mcp`), plus external dependencies.
+**Goal:** Declare one library target (`LocalmemCore`) and two executable targets (`localmem`, `localmem-mcp`), plus external dependencies.
 
 **Why:** Keeping the core in its own library means the CLI and MCP server both call into the same code paths — no duplication of storage logic, no risk of drift.
 
@@ -64,12 +64,12 @@ This drops a minimal `Package.swift` next to your `docs/` folder. We'll rewrite 
 import PackageDescription
 
 let package = Package(
-    name: "LocalMem",
+    name: "Localmem",
     platforms: [
         .macOS(.v26),
     ],
     products: [
-        .library(name: "LocalMemCore", targets: ["LocalMemCore"]),
+        .library(name: "LocalmemCore", targets: ["LocalmemCore"]),
         .executable(name: "localmem", targets: ["localmem"]),
         .executable(name: "localmem-mcp", targets: ["localmem-mcp"]),
     ],
@@ -80,7 +80,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "LocalMemCore",
+            name: "LocalmemCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
@@ -88,20 +88,20 @@ let package = Package(
         .executableTarget(
             name: "localmem",
             dependencies: [
-                "LocalMemCore",
+                "LocalmemCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
         .executableTarget(
             name: "localmem-mcp",
             dependencies: [
-                "LocalMemCore",
+                "LocalmemCore",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(
-            name: "LocalMemCoreTests",
-            dependencies: ["LocalMemCore"]
+            name: "LocalmemCoreTests",
+            dependencies: ["LocalmemCore"]
         ),
     ]
 )
@@ -112,7 +112,7 @@ let package = Package(
 ### Step 1.3 — Create the source directories
 **Do:**
 ```bash
-mkdir -p Sources/LocalMemCore Sources/localmem/Commands Sources/localmem-mcp/Tools Tests/LocalMemCoreTests
+mkdir -p Sources/LocalmemCore Sources/localmem/Commands Sources/localmem-mcp/Tools Tests/LocalmemCoreTests
 ```
 
 ### Step 1.4 — Verify it resolves and builds
@@ -125,7 +125,7 @@ swift build
 **Verify:** Resolve downloads GRDB, swift-argument-parser, and swift-sdk into `.build/`. Build will fail because the targets have no sources yet — that's expected. Drop placeholders so the build succeeds:
 
 ```bash
-printf "// placeholder — replaced in Phase 2.1\n" > Sources/LocalMemCore/Placeholder.swift
+printf "// placeholder — replaced in Phase 2.1\n" > Sources/LocalmemCore/Placeholder.swift
 printf "print(\"localmem stub\")\n"               > Sources/localmem/main.swift
 printf "print(\"localmem-mcp stub\")\n"           > Sources/localmem-mcp/main.swift
 ```
@@ -136,7 +136,7 @@ Now `swift build` should succeed.
 
 ---
 
-## Phase 2 — Build `LocalMemCore`
+## Phase 2 — Build `LocalmemCore`
 
 This is the heart of the system. We'll build it in five files.
 
@@ -145,13 +145,13 @@ This is the heart of the system. We'll build it in five files.
 
 **Why:** macOS apps store persistent data under `~/Library/Application Support/<AppName>/`. Putting this in one place means the CLI, the MCP server, and (later) the app all read/write the same file without arguments.
 
-**Do:** Create `Sources/LocalMemCore/Paths.swift`:
+**Do:** Create `Sources/LocalmemCore/Paths.swift`:
 
 ```swift
 import Foundation
 
 public enum Paths {
-    /// Directory: ~/Library/Application Support/LocalMem
+    /// Directory: ~/Library/Application Support/Localmem
     public static func applicationSupportDirectory() throws -> URL {
         let base = try FileManager.default.url(
             for: .applicationSupportDirectory,
@@ -159,12 +159,12 @@ public enum Paths {
             appropriateFor: nil,
             create: true
         )
-        let dir = base.appendingPathComponent("LocalMem", isDirectory: true)
+        let dir = base.appendingPathComponent("Localmem", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    /// File: ~/Library/Application Support/LocalMem/memory.sqlite3
+    /// File: ~/Library/Application Support/Localmem/memory.sqlite3
     public static func databaseURL() throws -> URL {
         try applicationSupportDirectory().appendingPathComponent("memory.sqlite3")
     }
@@ -176,7 +176,7 @@ public enum Paths {
 ### Step 2.2 — `Memory.swift`: the data model
 **Goal:** Define the Swift types that flow through every layer.
 
-**Do:** Create `Sources/LocalMemCore/Memory.swift`:
+**Do:** Create `Sources/LocalmemCore/Memory.swift`:
 
 ```swift
 import Foundation
@@ -230,7 +230,7 @@ public enum MemorySource: String, Codable, Sendable {
 
 **Why triggers on memories → memories_fts:** FTS5 indexes are populated by writes to the virtual table. Rather than remembering to insert into both tables, the triggers make it automatic. When you delete a memory, the trigger removes the index entry too — so search results can't go stale.
 
-**Do:** Create `Sources/LocalMemCore/Migrations.swift`:
+**Do:** Create `Sources/LocalmemCore/Migrations.swift`:
 
 ```swift
 import GRDB
@@ -309,7 +309,7 @@ enum Migrations {
 
 **Why `prepareDatabase`:** SQLite pragmas like `journal_mode=WAL` must be set outside any transaction, on the raw connection. GRDB's `prepareDatabase` hook runs on every new connection before it's used.
 
-**Do:** Create `Sources/LocalMemCore/MemoryStore.swift`:
+**Do:** Create `Sources/LocalmemCore/MemoryStore.swift`:
 
 ```swift
 import Foundation
@@ -497,12 +497,12 @@ enum DateFormat {
 
 **Why Swift Testing instead of XCTest:** Swift Testing is Apple's modern test framework, official since Xcode 16 (Sept 2024). It uses macros (`@Test`, `#expect`) so failures show the actual expression instead of generic matcher names, runs tests in parallel by default, and works with structs (no `XCTestCase` subclassing). XCTest is in maintenance mode for new code. Full Xcode ships both — we pick the modern one.
 
-**Do:** Create `Tests/LocalMemCoreTests/MemoryStoreTests.swift`:
+**Do:** Create `Tests/LocalmemCoreTests/MemoryStoreTests.swift`:
 
 ```swift
 import Testing
 import Foundation
-@testable import LocalMemCore
+@testable import LocalmemCore
 
 @Suite("MemoryStore")
 struct MemoryStoreTests {
@@ -577,21 +577,21 @@ swift test
 
 **Why argument-parser:** Apple's official CLI framework. You declare commands as types conforming to `ParsableCommand`; the framework handles `--help`, validation, and error printing for free.
 
-**Do:** Delete `Sources/localmem/main.swift` and create `Sources/localmem/LocalMemCLI.swift`:
+**Do:** Delete `Sources/localmem/main.swift` and create `Sources/localmem/LocalmemCLI.swift`:
 
 ```bash
 rm Sources/localmem/main.swift
 ```
 
 ```swift
-// Sources/localmem/LocalMemCLI.swift
+// Sources/localmem/LocalmemCLI.swift
 import ArgumentParser
 
 @main
-struct LocalMemCLI: AsyncParsableCommand {
+struct LocalmemCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "localmem",
-        abstract: "Inspect LocalMem memories.",
+        abstract: "Inspect Localmem memories.",
         subcommands: []
         // Populated incrementally in steps 3.2–3.5.
     )
@@ -613,7 +613,7 @@ struct LocalMemCLI: AsyncParsableCommand {
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct ListCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -645,7 +645,7 @@ struct ListCommand: AsyncParsableCommand {
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct SearchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -681,7 +681,7 @@ struct SearchCommand: AsyncParsableCommand {
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct ShowCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -735,7 +735,7 @@ struct ShowCommand: AsyncParsableCommand {
 ```swift
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct AddCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -783,7 +783,7 @@ extension MemoryType: ExpressibleByArgument {}
 
 > **What's interesting about `--type`:** `MemoryType` is a `String`-backed `CaseIterable` enum. Conforming to `ExpressibleByArgument` (a one-line extension) lets argument-parser parse the raw string and — because the enum is `CaseIterable` — auto-generate the help text listing valid values. No manual `--help` strings to keep in sync with the enum.
 
-**Register it in `LocalMemCLI.swift`'s `subcommands` array.**
+**Register it in `LocalmemCLI.swift`'s `subcommands` array.**
 
 **Verify:**
 ```bash
@@ -798,12 +798,12 @@ You should see the new memory in the list. `localmem add --help` shows the auto-
 
 ```swift
 import ArgumentParser
-import LocalMemCore
+import LocalmemCore
 
 struct PathCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "path",
-        abstract: "Print the LocalMem database path."
+        abstract: "Print the Localmem database path."
     )
 
     func run() throws {
@@ -817,7 +817,7 @@ struct PathCommand: ParsableCommand {
 
 ```swift
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 enum OutputFormatter {
     static func printTable(_ memories: [Memory]) {
@@ -869,7 +869,7 @@ swift run localmem list
 swift run localmem path
 ```
 
-**Verify:** `list` prints `(no memories)` against a fresh database; `path` prints `~/Library/Application Support/LocalMem/memory.sqlite3`.
+**Verify:** `list` prints `(no memories)` against a fresh database; `path` prints `~/Library/Application Support/Localmem/memory.sqlite3`.
 
 You can't write yet — that's intentional, writes happen via MCP. To smoke-test reads, drop into Swift and seed a memory:
 
@@ -896,11 +896,11 @@ Or temporarily, use the test scaffolding to insert a memory and re-run `list` po
 
 ```swift
 import Foundation
-import LocalMemCore
+import LocalmemCore
 import MCP
 
 @main
-struct LocalMemMCP {
+struct LocalmemMCP {
     static func main() async throws {
         let store = try MemoryStore(databaseURL: try Paths.databaseURL())
         let registry = ToolRegistry(store: store)
@@ -921,7 +921,7 @@ struct LocalMemMCP {
 
         let transport = StdioTransport()
         try await server.start(transport: transport)
-        log("LocalMem MCP server ready.")
+        log("Localmem MCP server ready.")
         await server.waitUntilCompleted()
     }
 
@@ -936,7 +936,7 @@ struct LocalMemMCP {
 
 ```swift
 import Foundation
-import LocalMemCore
+import LocalmemCore
 import MCP
 
 struct ToolRegistry {
@@ -1159,11 +1159,11 @@ Both should show the memory. Now you have the loop closed.
 
 ## What's next
 
-You now have a working V1 of LocalMem. The natural next slices, in order:
+You now have a working V1 of Localmem. The natural next slices, in order:
 
 1. **Encryption** — wrap `content` in AES-GCM, store the key in Keychain behind a biometric access control. Decide what to do with the plaintext FTS index (see open question in the design doc).
 2. **`memory_delete`** — add the fourth MCP tool plus a CLI `delete` command with confirmation.
 3. **Access log** — start writing `access_events` rows for every MCP read/write, surface them via `localmem activity`.
-4. **macOS app** — SwiftUI shell that uses the same `LocalMemCore` package; no new business logic, just UI.
+4. **macOS app** — SwiftUI shell that uses the same `LocalmemCore` package; no new business logic, just UI.
 
 Each lands additively on top of the V1 schema — no breaking migrations.

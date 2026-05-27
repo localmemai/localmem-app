@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "LocalMem",
+    name: "Localmem",
     platforms: [
         .macOS(.v26),
     ],
     products: [
-        .library(name: "LocalMemCore", targets: ["LocalMemCore"]),
+        .library(name: "LocalmemCore", targets: ["LocalmemCore"]),
         .executable(name: "localmem", targets: ["localmem"]),
         .executable(name: "localmem-mcp", targets: ["localmem-mcp"]),
     ],
@@ -19,7 +19,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "LocalMemCore",
+            name: "LocalmemCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
@@ -27,7 +27,7 @@ let package = Package(
         .executableTarget(
             name: "localmem",
             dependencies: [
-                "LocalMemCore",
+                "LocalmemCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
@@ -35,13 +35,13 @@ let package = Package(
         .executableTarget(
             name: "localmem-mcp",
             dependencies: [
-                "LocalMemCore",
+                "LocalmemCore",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(
-            name: "LocalMemCoreTests",
-            dependencies: ["LocalMemCore"]
+            name: "LocalmemCoreTests",
+            dependencies: ["LocalmemCore"]
         ),
     ]
 )

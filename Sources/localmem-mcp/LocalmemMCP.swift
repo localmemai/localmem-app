@@ -1,9 +1,9 @@
 import Foundation
-import LocalMemCore
+import LocalmemCore
 import MCP
 
 @main
-struct LocalMemMCP {
+struct LocalmemMCP {
     static func main() async throws {
         let store = try MemoryStore()
         let registry = ToolRegistry(store: store)
@@ -24,7 +24,7 @@ struct LocalMemMCP {
 
         let transport = StdioTransport()
         try await server.start(transport: transport)
-        log("LocalMem MCP server ready.")
+        log("Localmem MCP server ready.")
         await server.waitUntilCompleted()
     }
 

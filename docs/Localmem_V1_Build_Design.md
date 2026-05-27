@@ -1,10 +1,10 @@
-# LocalMem V1 Core Build - Design Document
+# Localmem V1 Core Build - Design Document
 
 ## Scope
-This document covers the first shippable slice of LocalMem: a local SQLite-backed memory store, an MCP server that Claude Desktop talks to, and a read-only CLI for inspecting stored memory.
+This document covers the first shippable slice of Localmem: a local SQLite-backed memory store, an MCP server that Claude Desktop talks to, and a read-only CLI for inspecting stored memory.
 
 ### In scope
-- Swift package with a reusable core (`LocalMemCore`)
+- Swift package with a reusable core (`LocalmemCore`)
 - Local SQLite store with FTS5 full-text search
 - MCP server exposing `memory_store`, `memory_search`, `memory_recent`
 - CLI: `list`, `search`, `show`, `add`, `path`
@@ -30,14 +30,14 @@ Single SwiftPM package with three targets:
 localmem-app/
 ├── Package.swift
 ├── Sources/
-│   ├── LocalMemCore/          # library target
+│   ├── LocalmemCore/          # library target
 │   │   ├── Memory.swift
 │   │   ├── MemoryStore.swift
 │   │   ├── Database.swift
 │   │   ├── Migrations.swift
 │   │   └── Paths.swift
 │   ├── localmem/              # CLI executable
-│   │   ├── LocalMemCLI.swift
+│   │   ├── LocalmemCLI.swift
 │   │   └── Commands/
 │   │       ├── ListCommand.swift
 │   │       ├── SearchCommand.swift
@@ -51,7 +51,7 @@ localmem-app/
 │           ├── MemorySearchTool.swift
 │           └── MemoryRecentTool.swift
 └── Tests/
-    └── LocalMemCoreTests/
+    └── LocalmemCoreTests/
 ```
 
 ### Dependencies
@@ -65,7 +65,7 @@ Target platform: macOS 26+ (Tahoe). Swift 6+. SwiftPM platform pin: `.macOS(.v26
 
 ### Location
 ```
-~/Library/Application Support/LocalMem/memory.sqlite3
+~/Library/Application Support/Localmem/memory.sqlite3
 ```
 
 Created on first run if missing. The directory is also created if missing.
@@ -137,7 +137,7 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 
 ## Core API
 
-`LocalMemCore` exposes one main type:
+`LocalmemCore` exposes one main type:
 
 ```swift
 public actor MemoryStore {
@@ -223,7 +223,7 @@ Input schema:
 Output: array of memory objects.
 
 ### Logging
-The MCP server logs to stderr only — stdout is the MCP transport channel and must stay clean. Claude Desktop captures stderr; for dev, also tee to `~/Library/Logs/LocalMem/mcp.log`.
+The MCP server logs to stderr only — stdout is the MCP transport channel and must stay clean. Claude Desktop captures stderr; for dev, also tee to `~/Library/Logs/Localmem/mcp.log`.
 
 ### Errors
 Surfaced as MCP tool errors with a short human-readable message. No stack traces over the wire.
@@ -277,13 +277,13 @@ After editing the config the user restarts Claude Desktop. The three tools appea
 swift build                    # debug build
 swift run localmem list        # run CLI from build dir
 swift run localmem-mcp         # run MCP server (stdio; for manual testing pipe JSON-RPC)
-swift test                     # run LocalMemCore unit tests
+swift test                     # run LocalmemCore unit tests
 swift build -c release         # release build
 ```
 
 ## Testing Strategy
 
-V1 tests focus on `LocalMemCore`:
+V1 tests focus on `LocalmemCore`:
 - round-trip `add` → `get` → `search` → `recent`
 - FTS5 returns matches and excludes non-matches
 - migrations apply cleanly to a fresh DB

@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct StatusCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -18,7 +18,7 @@ struct StatusCommand: AsyncParsableCommand {
         let fileSize = (try? FileManager.default
             .attributesOfItem(atPath: dbPath)[.size] as? Int) ?? 0
 
-        print("LocalMem Status")
+        print("Localmem Status")
         print(String(repeating: "=", count: 56))
         print("")
         print("Store")

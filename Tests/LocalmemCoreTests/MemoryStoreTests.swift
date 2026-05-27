@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import LocalMemCore
+@testable import LocalmemCore
 
 @Suite("MemoryStore")
 struct MemoryStoreTests {

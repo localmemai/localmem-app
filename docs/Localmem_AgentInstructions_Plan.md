@@ -1,4 +1,4 @@
-# LocalMem — Agent Instructions Implementation Plan
+# Localmem — Agent Instructions Implementation Plan
 
 **Status:** Draft / proposed
 **Owner:** Vidit
@@ -6,7 +6,7 @@
 
 ## 1. Problem
 
-When a user installs LocalMem via `localmem setup`, the MCP server is registered with their AI agents (Claude Code, Claude Desktop, Cursor, Codex, Antigravity). The agents can *discover* the three tools (`memory_recent`, `memory_search`, `memory_store`) via MCP, but they don't know:
+When a user installs Localmem via `localmem setup`, the MCP server is registered with their AI agents (Claude Code, Claude Desktop, Cursor, Codex, Antigravity). The agents can *discover* the three tools (`memory_recent`, `memory_search`, `memory_store`) via MCP, but they don't know:
 
 - **When** to call them (e.g. "store this after a non-obvious decision," "search before answering a question that depends on past context").
 - **What style** of content belongs in memory vs. ephemeral chat.
@@ -44,7 +44,7 @@ These need to be settled before implementation:
 | **B. Project only** | `<repo>/AGENTS.md` + `CLAUDE.md` bridge | Respects per-project context; user controls | Has to be re-run per project; no use outside repos |
 | **C. Both** | Global default + per-project override | Maximum coverage | More install logic; more places to keep in sync |
 
-**Recommendation:** **A (global)** for V1. LocalMem is a user-level tool — memory lives in `~/.localmem/`, not per repo. Per-project overrides can be a V2 feature if users ask.
+**Recommendation:** **A (global)** for V1. Localmem is a user-level tool — memory lives in `~/.localmem/`, not per repo. Per-project overrides can be a V2 feature if users ask.
 
 ### 3.2 Install trigger
 
@@ -60,8 +60,8 @@ These need to be settled before implementation:
 
 If `~/.claude/CLAUDE.md` already exists (very common for Claude Code users), we must not clobber it. Options:
 
-- **Fenced block:** Insert a `<!-- LocalMem:start -->` … `<!-- LocalMem:end -->` block; replace contents inside on re-run.
-- **Import directive:** Append a single line `@~/.localmem/AGENTS.md` and store the actual content in LocalMem's own data dir.
+- **Fenced block:** Insert a `<!-- Localmem:start -->` … `<!-- Localmem:end -->` block; replace contents inside on re-run.
+- **Import directive:** Append a single line `@~/.localmem/AGENTS.md` and store the actual content in Localmem's own data dir.
 - **Sidecar:** Write `~/.claude/localmem.md` and tell the user to add `@localmem.md`.
 
 **Recommendation:** **Import directive** — store canonical content at `~/.localmem/AGENTS.md` (single source of truth), and inject one-line imports into each agent's instruction file. Idempotent re-runs become trivial (line either present or not). Falls back to fenced block for agents that don't support imports.
@@ -71,9 +71,9 @@ If `~/.claude/CLAUDE.md` already exists (very common for Claude Code users), we 
 Skeleton of `~/.localmem/AGENTS.md` (this is the *content plan*, not the final copy):
 
 ```markdown
-# LocalMem — Persistent Memory for AI Agents
+# Localmem — Persistent Memory for AI Agents
 
-LocalMem provides a local, file-based memory store accessible via three MCP tools.
+Localmem provides a local, file-based memory store accessible via three MCP tools.
 Use it to persist context across conversations.
 
 ## Tools
@@ -94,9 +94,9 @@ questions that depend on prior conversations or user preferences.
 List the N most recently stored memories. Use at session start to refresh
 context, or when the user references "what we talked about last time."
 
-## When to use LocalMem vs. project files (CLAUDE.md, AGENTS.md)
+## When to use Localmem vs. project files (CLAUDE.md, AGENTS.md)
 
-- LocalMem = user-level, cross-project, mutable
+- Localmem = user-level, cross-project, mutable
 - AGENTS.md/CLAUDE.md = project-level, version-controlled, stable
 
 ## Examples
@@ -132,20 +132,20 @@ Keep it under ~150 lines. Agent instruction files compete for context-window bud
 - Hook into existing `StatusCommand` output.
 
 ### Phase 5 — Docs
-- Update `LocalMem_Setup_Build_Guide.md` with the new flow.
+- Update `Localmem_Setup_Build_Guide.md` with the new flow.
 - Add a short `docs/AgentInstructions.md` explaining the AGENTS.md strategy for end users.
 
 ## 6. Open Questions
 
 1. Do we ship a version stamp in the imported file so re-runs can offer to update outdated copies?
 2. For agents without import support (Antigravity, Claude Desktop) — skip, or inline the full content with fenced markers?
-3. Should the content live in the repo (template) or be fetched from a URL at install time (allows update without reinstalling LocalMem)?
+3. Should the content live in the repo (template) or be fetched from a URL at install time (allows update without reinstalling Localmem)?
 4. Per-project override mechanism — defer to V2 or include now?
 
 ## 7. Out of Scope (V1)
 
 - Per-project AGENTS.md generation (V2).
-- Auto-updating `~/.localmem/AGENTS.md` when LocalMem is upgraded — V1 leaves it to the user (or `localmem instructions reinstall`).
+- Auto-updating `~/.localmem/AGENTS.md` when Localmem is upgraded — V1 leaves it to the user (or `localmem instructions reinstall`).
 - Localization of instruction content.
 - Telemetry on whether agents actually call the tools after reading the instructions.
 

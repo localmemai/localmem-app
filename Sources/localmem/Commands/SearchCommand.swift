@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 struct SearchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

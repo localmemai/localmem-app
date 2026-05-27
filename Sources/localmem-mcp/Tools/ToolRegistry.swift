@@ -1,5 +1,5 @@
 import Foundation
-import LocalMemCore
+import LocalmemCore
 import MCP
 
 struct ToolRegistry: Sendable {
@@ -14,7 +14,7 @@ struct ToolRegistry: Sendable {
     private var storeTool: Tool {
         Tool(
             name: "memory_store",
-            description: "Persist a new memory in LocalMem.",
+            description: "Persist a new memory in Localmem.",
             inputSchema: [
                 "type": "object",
                 "required": ["content"],

@@ -1,5 +1,5 @@
 import Foundation
-import LocalMemCore
+import LocalmemCore
 
 enum OutputFormatter {
     static func printTable(_ memories: [Memory]) {
