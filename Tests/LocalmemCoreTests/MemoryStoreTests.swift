@@ -56,4 +56,45 @@ struct MemoryStoreTests {
         #expect(fetched?.type == .preference)
         #expect(Set(fetched?.tags ?? []) == ["coffee", "preferences"])
     }
+
+    @Test func deleteRemovesMemoryAndIsIdempotent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(content: "to be deleted", type: .note, source: .user)
+
+        // First delete: row existed, returns true.
+        let firstDelete = try await store.delete(id: added.id)
+        #expect(firstDelete == true)
+
+        // Memory is gone from the store.
+        let fetched = try await store.get(id: added.id)
+        #expect(fetched == nil)
+
+        // Idempotent: deleting again returns false, doesn't error.
+        let secondDelete = try await store.delete(id: added.id)
+        #expect(secondDelete == false)
+    }
+
+    @Test func deleteCleansFtsIndexAndTags() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(
+            content: "uniquely searchable content",
+            type: .note,
+            tags: ["work", "draft"],
+            source: .user
+        )
+
+        // Confirm it shows up via FTS before delete.
+        let before = try await store.search(query: "searchable")
+        #expect(before.count == 1)
+
+        _ = try await store.delete(id: added.id)
+
+        // FTS trigger cleaned the index — no orphan hits.
+        let after = try await store.search(query: "searchable")
+        #expect(after.isEmpty)
+    }
 }

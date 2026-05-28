@@ -66,6 +66,20 @@ public actor MemoryStore {
         return memory
     }
 
+    /// Deletes the memory with the given id. Returns true if a row was removed,
+    /// false if no memory with that id existed (idempotent).
+    /// The `memories_after_delete` trigger handles the FTS index;
+    /// `ON DELETE CASCADE` on `memory_tags` handles tag rows.
+    public func delete(id: UUID) async throws -> Bool {
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: "DELETE FROM memories WHERE id = ?",
+                arguments: [id.uuidString]
+            )
+            return db.changesCount > 0
+        }
+    }
+
     // MARK: - Read
 
     public func get(id: UUID) async throws -> Memory? {

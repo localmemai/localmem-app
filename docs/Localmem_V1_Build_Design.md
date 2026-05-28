@@ -7,14 +7,14 @@ This document covers the first shippable slice of Localmem: a local SQLite-backe
 - Swift package with a reusable core (`LocalmemCore`)
 - Local SQLite store with FTS5 full-text search
 - MCP server exposing `memory_store`, `memory_search`, `memory_recent`
-- CLI: `list`, `search`, `show`, `add`, `path`
+- CLI: `list`, `search`, `show`, `add`, `delete`, `path`, `setup`, `status`
 - Claude Desktop registration
 
 > The CLI was initially scoped as read-only with all writes going through MCP. We later added `add` as a developer/scripting surface so the CLI can be exercised end-to-end before the MCP server lands, and to support automation use cases (cron jobs, import scripts). The mental model: **CLI is the developer/power-user surface; MCP is the agent surface.**
 
 ### Explicitly deferred
 - Encryption (vault key, CryptoKit, Keychain, biometric unlock)
-- `memory_delete` MCP tool
+- **`memory_delete` MCP tool** — CLI delete shipped in V1, but the MCP-exposed version is deferred. Without per-agent identity and a permission model, a destructive MCP tool is a sharp edge: agents can misidentify the target memory under ambiguous user prompts, be tricked by prompt injection in search results, or interpret "clean up X" too broadly. Graduates from CLI-only to MCP when the access-control milestone ships (per-agent permission flags, "agent can only delete its own memories" default, in-app toggle to enable).
 - Sources (folders/files), source registration, source-scoped permissions
 - Per-agent attribution beyond a single `source: claude` stamp
 - Access event audit log surfaced to users
