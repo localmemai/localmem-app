@@ -1,8 +1,11 @@
 import Foundation
+import LocalmemCore
 
 struct SetupReport {
     struct Row { let name: String; let outcome: Result<RegistrationOutcome, Error> }
+    struct InstructionRow { let name: String; let outcome: Result<InstallationOutcome, Error> }
     let rows: [Row]
+    var instructionRows: [InstructionRow] = []
 
     static let headerLines: [String] = [
         "Localmem — installing MCP integration",
@@ -16,6 +19,20 @@ struct SetupReport {
         let paddedName = row.name.padding(toLength: 18, withPad: " ", startingAt: 0)
         return "\(symbol)  \(paddedName) \(detail)"
     }
+
+    /// Same formatting as `formatRow(Row)`, for the instructions-injection pass.
+    static func formatInstructionRow(_ row: InstructionRow) -> String {
+        let (symbol, detail) = instructionSymbolAndDetail(row.outcome)
+        let paddedName = row.name.padding(toLength: 18, withPad: " ", startingAt: 0)
+        return "\(symbol)  \(paddedName) \(detail)"
+    }
+
+    /// Section header for the instructions pass.
+    static let instructionsHeaderLines: [String] = [
+        "",
+        "Installing agent instructions",
+        String(repeating: "-", count: 56),
+    ]
 
     /// Bottom of the report: separator, counts, and the restart hint.
     static func renderSummary(_ rows: [Row]) -> String {
@@ -41,6 +58,10 @@ struct SetupReport {
     func render() -> String {
         var lines = Self.headerLines
         for row in rows { lines.append(Self.formatRow(row)) }
+        if !instructionRows.isEmpty {
+            lines.append(contentsOf: Self.instructionsHeaderLines)
+            for row in instructionRows { lines.append(Self.formatInstructionRow(row)) }
+        }
         lines.append(Self.renderSummary(rows))
         return lines.joined(separator: "\n")
     }
@@ -55,6 +76,20 @@ struct SetupReport {
             case .alreadyRegistered(let via): return ("↺", "already registered (via \(via.label))")
             case .updated(let via):           return ("✓", "updated (via \(via.label))")
             case .skipped(let why):           return ("–", "not installed — skipped (\(why))")
+            }
+        case .failure(let err):
+            return ("✗", "FAILED — \(err)")
+        }
+    }
+
+    private static func instructionSymbolAndDetail(_ outcome: Result<InstallationOutcome, Error>) -> (String, String) {
+        switch outcome {
+        case .success(let o):
+            switch o {
+            case .created:                return ("✓", "instructions file created")
+            case .imported:               return ("✓", "import line added")
+            case .alreadyImported:        return ("↺", "import line already present")
+            case .skipped(let why):       return ("–", "skipped (\(why))")
             }
         case .failure(let err):
             return ("✗", "FAILED — \(err)")

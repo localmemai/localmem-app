@@ -22,6 +22,9 @@ let package = Package(
             name: "LocalmemCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            resources: [
+                .process("Resources"),
             ]
         ),
         .executableTarget(

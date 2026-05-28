@@ -8,6 +8,9 @@ struct SetupCommand: AsyncParsableCommand {
         abstract: "Register localmem with every installed MCP client."
     )
 
+    @Flag(name: .long, inversion: .prefixedNo, help: "Install agent instruction files (~/.localmem/AGENTS.md and per-agent imports).")
+    var instructions: Bool = true
+
     func run() async throws {
         let binaryPath = try BinaryLocator.mcpServerPath()
 
@@ -26,6 +29,14 @@ struct SetupCommand: AsyncParsableCommand {
         } else {
             try await runBatch(registrars: registrars, binaryPath: binaryPath)
         }
+    }
+
+    /// Run the instructions installer and return per-target rows.
+    /// Caller decides how to render — streaming or batch.
+    private func runInstructionsInstall() throws -> [SetupReport.InstructionRow] {
+        let installer = try InstructionsInstaller()
+        let results = try installer.installAll()
+        return results.map { .init(name: $0.name, outcome: $0.outcome) }
     }
 
     // MARK: - Streaming (interactive terminal)
@@ -84,6 +95,13 @@ struct SetupCommand: AsyncParsableCommand {
             rows.append(row)
         }
 
+        if instructions {
+            for line in SetupReport.instructionsHeaderLines { print(line) }
+            for row in try runInstructionsInstall() {
+                print(SetupReport.formatInstructionRow(row))
+            }
+        }
+
         print(SetupReport.renderSummary(rows))
     }
 
@@ -114,6 +132,10 @@ struct SetupCommand: AsyncParsableCommand {
             }
             rows.append(.init(name: registrar.displayName, outcome: outcome))
         }
-        print(SetupReport(rows: rows).render())
+        var report = SetupReport(rows: rows)
+        if instructions {
+            report.instructionRows = try runInstructionsInstall()
+        }
+        print(report.render())
     }
 }
