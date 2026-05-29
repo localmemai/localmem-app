@@ -13,6 +13,21 @@ visible from every other repo's session — that's the whole point. Anything tha
 should *only* apply to one codebase belongs in that codebase's own `CLAUDE.md` or
 `AGENTS.md`, not here.
 
+## When to act
+
+**Trigger.** When the user says "remember X," states a preference about
+themselves or their workflow, or corrects you in a way that should outlive this
+conversation, call `memory_store` on the first mention. Don't wait to be asked
+twice, and don't defer to a project-scoped memory file when the fact is about
+the user.
+
+**Precedence over built-in memory.** Many agents ship their own memory system
+(e.g. Claude Code's auto-memory, ChatGPT memory). Those are typically
+project- or assistant-scoped. For anything **user-level and cross-project**,
+Localmem wins — store it here, and skip the built-in store for that fact so
+the same memory doesn't get duplicated in two places. Reserve the built-in
+system for project-scoped state, if you use it at all.
+
 ## How to think about Localmem vs. project files
 
 | Surface | Scope | Mutability | Versioned |
