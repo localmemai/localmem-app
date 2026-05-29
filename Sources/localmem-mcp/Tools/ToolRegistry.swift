@@ -163,6 +163,20 @@ struct ToolRegistry: Sendable {
         )
     }
 
+    // MARK: - Limits
+    // Must match the bounds advertised in the input schemas above. JSON-Schema
+    // bounds are advisory; the server has to enforce them itself.
+
+    private static let defaultLimit = 20
+    private static let maxLimit = 50
+    private static let maxContentBytes = 64_000
+    private static let maxTagCount = 16
+    private static let maxTagLength = 64
+
+    private static func clampLimit(_ raw: Int?) -> Int {
+        max(1, min(maxLimit, raw ?? defaultLimit))
+    }
+
     // MARK: - Dispatch
 
     func call(name: String, arguments: [String: Value]?) async throws -> CallTool.Result {
@@ -179,6 +193,11 @@ struct ToolRegistry: Sendable {
         guard let content = args["content"]?.stringValue, !content.isEmpty else {
             throw MCPError.invalidParams("`content` is required and must be non-empty.")
         }
+        guard content.utf8.count <= Self.maxContentBytes else {
+            throw MCPError.invalidParams(
+                "`content` is \(content.utf8.count) bytes; max is \(Self.maxContentBytes). Split into multiple memories."
+            )
+        }
         let title = args["title"]?.stringValue
 
         let typeRaw = args["type"]?.stringValue ?? "note"
@@ -186,7 +205,12 @@ struct ToolRegistry: Sendable {
             throw MCPError.invalidParams("Unknown memory type: \(typeRaw)")
         }
 
-        let tags = args["tags"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+        let tags = Array(
+            (args["tags"]?.arrayValue?.compactMap { $0.stringValue } ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0.count <= Self.maxTagLength }
+                .prefix(Self.maxTagCount)
+        )
 
         let memory = try await store.add(
             content: content,
@@ -202,13 +226,13 @@ struct ToolRegistry: Sendable {
         guard let query = args["query"]?.stringValue else {
             throw MCPError.invalidParams("`query` is required.")
         }
-        let limit = args["limit"]?.intValue ?? 20
+        let limit = Self.clampLimit(args["limit"]?.intValue)
         let memories = try await store.search(query: query, limit: limit)
         return .init(content: [.plainText(try memories.toJSONString())])
     }
 
     private func handleRecent(_ args: [String: Value]) async throws -> CallTool.Result {
-        let limit = args["limit"]?.intValue ?? 20
+        let limit = Self.clampLimit(args["limit"]?.intValue)
         let memories = try await store.recent(limit: limit)
         return .init(content: [.plainText(try memories.toJSONString())])
     }

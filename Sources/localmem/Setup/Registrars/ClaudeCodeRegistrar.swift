@@ -22,7 +22,14 @@ struct ClaudeCodeRegistrar: ClientRegistrar {
 
     func registerViaCLI(binaryPath: String) throws -> RegistrationOutcome {
         let list = try ShellHelper.run("claude", ["mcp", "list"])
-        let registered = list.stdout.contains("localmem")
+        // Match `localmem` as a whole entry, not any line that happens to
+        // contain the substring (e.g. another server called `localmem-staging`).
+        let registered = list.stdout.split(separator: "\n").contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed == "localmem"
+                || trimmed.hasPrefix("localmem ")
+                || trimmed.hasPrefix("localmem:")
+        }
         let pointsAtUs = list.stdout.contains(binaryPath)
 
         if registered && pointsAtUs { return .alreadyRegistered(via: .cli) }

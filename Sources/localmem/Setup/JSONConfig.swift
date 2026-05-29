@@ -11,7 +11,8 @@ enum JSONConfig {
         )
 
         var current: [String: Any] = [:]
-        if FileManager.default.fileExists(atPath: url.path) {
+        let fileExisted = FileManager.default.fileExists(atPath: url.path)
+        if fileExisted {
             let data = try Data(contentsOf: url)
             if !data.isEmpty {
                 current = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
@@ -24,13 +25,13 @@ enum JSONConfig {
             options: [.prettyPrinted, .sortedKeys]
         )
 
-        // Skip rewrite if structurally identical.
-        if FileManager.default.fileExists(atPath: url.path) {
-            let currentData = try Data(contentsOf: url)
-            let currentNormalized = (try? JSONSerialization.data(
-                withJSONObject: try JSONSerialization.jsonObject(with: currentData),
+        // Skip rewrite if structurally identical. Re-serialize the already-parsed
+        // `current` instead of re-reading the file.
+        if fileExisted {
+            let currentNormalized = try JSONSerialization.data(
+                withJSONObject: current,
                 options: [.prettyPrinted, .sortedKeys]
-            )) ?? currentData
+            )
             if currentNormalized == nextData { return false }
         }
 

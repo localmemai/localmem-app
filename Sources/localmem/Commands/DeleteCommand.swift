@@ -58,13 +58,15 @@ struct DeleteCommand: AsyncParsableCommand {
            let memory = try await store.get(id: uuid) {
             return memory
         }
-        let candidates = try await store.recent(limit: 500)
-            .filter { $0.id.uuidString.lowercased().hasPrefix(idOrPrefix.lowercased()) }
-        guard let memory = candidates.first else {
+        let candidates = try await store.findIDs(prefix: idOrPrefix)
+        guard let id = candidates.first else {
             throw ValidationError("No memory matching '\(idOrPrefix)'.")
         }
         guard candidates.count == 1 else {
-            throw ValidationError("Ambiguous prefix '\(idOrPrefix)' matches \(candidates.count) memories.")
+            throw ValidationError("Ambiguous prefix '\(idOrPrefix)' matches multiple memories.")
+        }
+        guard let memory = try await store.get(id: id) else {
+            throw ValidationError("No memory matching '\(idOrPrefix)'.")
         }
         return memory
     }

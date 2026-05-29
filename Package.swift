@@ -46,5 +46,21 @@ let package = Package(
             name: "LocalmemCoreTests",
             dependencies: ["LocalmemCore"]
         ),
+        .testTarget(
+            name: "LocalmemMCPTests",
+            dependencies: [
+                "localmem-mcp",
+                "LocalmemCore",
+                .product(name: "MCP", package: "swift-sdk"),
+            ]
+        ),
+        .testTarget(
+            name: "LocalmemTests",
+            dependencies: [
+                "localmem",
+                "LocalmemCore",
+                .product(name: "TOMLKit", package: "TOMLKit"),
+            ]
+        ),
     ]
 )

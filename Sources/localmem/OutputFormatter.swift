@@ -2,18 +2,22 @@ import Foundation
 import LocalmemCore
 
 enum OutputFormatter {
+    private static let tableDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+
     static func printTable(_ memories: [Memory]) {
         guard !memories.isEmpty else {
             print("(no memories)")
             return
         }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
         print("ID        CREATED              TYPE        TITLE")
         for memory in memories {
             let shortId = String(memory.id.uuidString.prefix(8)).lowercased()
-            let created = formatter.string(from: memory.createdAt)
+            let created = tableDateFormatter.string(from: memory.createdAt)
             let type    = memory.type.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)
             let title   = memory.title ?? String(memory.content.prefix(60))
             print("\(shortId)  \(created)  \(type)  \(title)")

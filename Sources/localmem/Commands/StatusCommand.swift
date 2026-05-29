@@ -13,7 +13,7 @@ struct StatusCommand: AsyncParsableCommand {
         let store = try MemoryStore()
         let dbPath = try Paths.databaseURL().path
         let recent = try await store.recent(limit: 1)
-        let total = try await store.recent(limit: 100000).count
+        let total = try await store.count()
 
         let fileSize = (try? FileManager.default
             .attributesOfItem(atPath: dbPath)[.size] as? Int) ?? 0

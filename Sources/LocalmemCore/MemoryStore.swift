@@ -88,14 +88,35 @@ public actor MemoryStore {
         }
     }
 
-    public func recent(limit: Int = 20) async throws -> [Memory] {
+    public func count() async throws -> Int {
         try await dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM memories") ?? 0
+        }
+    }
+
+    /// Returns up to two memory ids whose string form starts with `prefix`
+    /// (case-insensitive). Two is enough to detect ambiguity without
+    /// materializing every candidate.
+    public func findIDs(prefix: String) async throws -> [UUID] {
+        let pattern = prefix + "%"
+        return try await dbQueue.read { db in
             let ids = try String.fetchAll(
                 db,
-                sql: "SELECT id FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                sql: "SELECT id FROM memories WHERE id LIKE ? LIMIT 2",
+                arguments: [pattern]
+            )
+            return ids.compactMap { UUID(uuidString: $0) }
+        }
+    }
+
+    public func recent(limit: Int = 20) async throws -> [Memory] {
+        try await dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 arguments: [limit]
             )
-            return try ids.compactMap { try Self.fetchMemory(id: $0, in: db) }
+            return try Self.attachTags(rows: rows, in: db)
         }
     }
 
@@ -103,7 +124,7 @@ public actor MemoryStore {
         let fts = Self.sanitizeFTSQuery(query)
         guard !fts.isEmpty else { return [] }
         return try await dbQueue.read { db in
-            let ids = try String.fetchAll(
+            let orderedIDs = try String.fetchAll(
                 db,
                 sql: """
                     SELECT memory_id FROM memories_fts
@@ -113,7 +134,16 @@ public actor MemoryStore {
                     """,
                 arguments: [fts, limit]
             )
-            return try ids.compactMap { try Self.fetchMemory(id: $0, in: db) }
+            guard !orderedIDs.isEmpty else { return [] }
+            let placeholders = Self.placeholders(count: orderedIDs.count)
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM memories WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(orderedIDs)
+            )
+            let memories = try Self.attachTags(rows: rows, in: db)
+            let byID = Dictionary(uniqueKeysWithValues: memories.map { ($0.id.uuidString, $0) })
+            return orderedIDs.compactMap { byID[$0] }
         }
     }
 
@@ -135,8 +165,40 @@ public actor MemoryStore {
         return try Memory(row: row, tags: tags)
     }
 
+    /// Batched tag fetch for a set of already-loaded memory rows. Two queries
+    /// total (the row select that produced `rows`, plus one tag select for all
+    /// ids), regardless of how many memories were returned.
+    private static func attachTags(rows: [Row], in db: Database) throws -> [Memory] {
+        guard !rows.isEmpty else { return [] }
+        let ids: [String] = rows.compactMap { $0["id"] }
+        let placeholders = placeholders(count: ids.count)
+        let tagRows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT memory_id, tag FROM memory_tags
+                WHERE memory_id IN (\(placeholders))
+                ORDER BY memory_id, tag
+                """,
+            arguments: StatementArguments(ids)
+        )
+        var tagsByID: [String: [String]] = [:]
+        for row in tagRows {
+            guard let memID: String = row["memory_id"], let tag: String = row["tag"] else { continue }
+            tagsByID[memID, default: []].append(tag)
+        }
+        return try rows.compactMap { row in
+            guard let id: String = row["id"] else { return nil }
+            return try Memory(row: row, tags: tagsByID[id] ?? [])
+        }
+    }
+
+    private static func placeholders(count: Int) -> String {
+        Array(repeating: "?", count: count).joined(separator: ",")
+    }
+
     /// Wraps user input so it cannot break FTS5 syntax.
-    /// Quoting the whole query treats it as a phrase or sequence of phrases.
+    /// Quoting the whole query treats the input as a single phrase — wildcard,
+    /// AND/OR/NEAR operators in user input become literal characters by design.
     private static func sanitizeFTSQuery(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }

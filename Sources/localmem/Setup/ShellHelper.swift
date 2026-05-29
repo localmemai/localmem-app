@@ -3,9 +3,19 @@ import Foundation
 enum ShellHelper {
     struct Result { let exitCode: Int32; let stdout: String; let stderr: String }
 
-    /// Returns true if `command` is found on PATH.
+    /// Returns true if `command` is found on PATH. Walks PATH in-process
+    /// rather than forking `which`, so a `localmem setup` of five registrars
+    /// pays zero subprocess overhead for the existence checks.
     static func commandExists(_ command: String) -> Bool {
-        (try? run("/usr/bin/env", ["which", command]).exitCode) == 0
+        if command.contains("/") {
+            return FileManager.default.isExecutableFile(atPath: command)
+        }
+        guard let pathEnv = ProcessInfo.processInfo.environment["PATH"] else { return false }
+        let fm = FileManager.default
+        for dir in pathEnv.split(separator: ":") where !dir.isEmpty {
+            if fm.isExecutableFile(atPath: "\(dir)/\(command)") { return true }
+        }
+        return false
     }
 
     @discardableResult
