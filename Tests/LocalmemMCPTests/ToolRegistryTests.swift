@@ -13,8 +13,11 @@ struct ToolRegistryTests {
     func makeRegistry() throws -> (ToolRegistry, URL) {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".sqlite3")
-        let store = try MemoryStore(databaseURL: tmp)
-        return (ToolRegistry(store: store), tmp)
+        let database = try LocalmemDatabase(url: tmp)
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+        let identity = MCPClientIdentity(fallback: "test-client")
+        return (ToolRegistry(store: store, activityStore: activityStore, identity: identity), tmp)
     }
 
     // MARK: - Descriptors
@@ -60,6 +63,32 @@ struct ToolRegistryTests {
         )
         let text = result.content.firstText
         #expect(text.contains("uniquely searchable phrase"))
+    }
+
+    @Test("calls record activity rows")
+    func callsRecordActivityRows() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let database = try LocalmemDatabase(url: tmp)
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+        let identity = MCPClientIdentity(fallback: "test-client")
+        let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
+
+        _ = try await registry.call(
+            name: "memory_store",
+            arguments: ["content": .string("activity searchable phrase")]
+        )
+        _ = try await registry.call(
+            name: "memory_search",
+            arguments: ["query": .string("activity")]
+        )
+
+        let rows = try await activityStore.recent(limit: 10)
+        #expect(rows.map(\.operation).contains("memory_store"))
+        #expect(rows.map(\.operation).contains("memory_search"))
+        #expect(rows.allSatisfy { $0.actorID == "test-client" })
     }
 
     @Test("call routes memory_recent and returns newest-first JSON")

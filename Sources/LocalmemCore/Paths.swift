@@ -14,6 +14,6 @@ public enum Paths {
     }
 
     public static func databaseURL() throws -> URL {
-        try applicationSupportDirectory().appendingPathComponent("memory.sqlite3")
+        try applicationSupportDirectory().appendingPathComponent("localmem.sqlite3")
     }
 }

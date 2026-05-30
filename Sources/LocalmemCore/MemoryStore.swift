@@ -2,26 +2,23 @@ import Foundation
 import GRDB
 
 public actor MemoryStore {
-    private let dbQueue: DatabaseQueue
+    private let database: LocalmemDatabase
 
     /// Opens the store at the default user-level database path
-    /// (`~/Library/Application Support/Localmem/memory.sqlite3`).
+    /// (`~/Library/Application Support/Localmem/localmem.sqlite3`).
     /// This is the only init exposed to consumers — production code never
     /// needs to choose a path. Tests reach the explicit-path init below via
     /// `@testable import`.
     public init() throws {
-        try self.init(databaseURL: Paths.databaseURL())
+        try self.init(database: LocalmemDatabase())
     }
 
     init(databaseURL: URL) throws {
-        var config = Configuration()
-        config.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA journal_mode=WAL")
-            try db.execute(sql: "PRAGMA foreign_keys=ON")
-            try db.execute(sql: "PRAGMA busy_timeout=5000")
-        }
-        self.dbQueue = try DatabaseQueue(path: databaseURL.path, configuration: config)
-        try Migrations.migrator.migrate(dbQueue)
+        try self.init(database: LocalmemDatabase(url: databaseURL))
+    }
+
+    public init(database: LocalmemDatabase) {
+        self.database = database
     }
 
     // MARK: - Write
@@ -31,7 +28,9 @@ public actor MemoryStore {
         type: MemoryType,
         title: String? = nil,
         tags: [String] = [],
-        source: MemorySource
+        source: MemorySource,
+        actorKind: ActorKind,
+        actorID: String? = nil
     ) async throws -> Memory {
         let memory = Memory(
             type: type,
@@ -40,7 +39,7 @@ public actor MemoryStore {
             tags: tags,
             source: source
         )
-        try await dbQueue.write { db in
+        try await database.write { db in
             try db.execute(
                 sql: """
                     INSERT INTO memories (id, type, title, content, source, created_at, updated_at)
@@ -62,6 +61,12 @@ public actor MemoryStore {
                     arguments: [memory.id.uuidString, tag]
                 )
             }
+            try ActivityStore.add(Activity(
+                actorKind: actorKind,
+                actorID: actorID,
+                operation: "memory_store",
+                memoryID: memory.id
+            ), in: db)
         }
         return memory
     }
@@ -70,26 +75,34 @@ public actor MemoryStore {
     /// false if no memory with that id existed (idempotent).
     /// The `memories_after_delete` trigger handles the FTS index;
     /// `ON DELETE CASCADE` on `memory_tags` handles tag rows.
-    public func delete(id: UUID) async throws -> Bool {
-        try await dbQueue.write { db in
+    public func delete(id: UUID, actorKind: ActorKind, actorID: String? = nil) async throws -> Bool {
+        try await database.write { db in
             try db.execute(
                 sql: "DELETE FROM memories WHERE id = ?",
                 arguments: [id.uuidString]
             )
-            return db.changesCount > 0
+            let existed = db.changesCount > 0
+            try ActivityStore.add(Activity(
+                actorKind: actorKind,
+                actorID: actorID,
+                operation: "memory_delete",
+                memoryID: id,
+                resultCount: existed ? 1 : 0
+            ), in: db)
+            return existed
         }
     }
 
     // MARK: - Read
 
     public func get(id: UUID) async throws -> Memory? {
-        try await dbQueue.read { db in
+        try await database.read { db in
             try Self.fetchMemory(id: id.uuidString, in: db)
         }
     }
 
     public func count() async throws -> Int {
-        try await dbQueue.read { db in
+        try await database.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM memories") ?? 0
         }
     }
@@ -99,7 +112,7 @@ public actor MemoryStore {
     /// materializing every candidate.
     public func findIDs(prefix: String) async throws -> [UUID] {
         let pattern = prefix + "%"
-        return try await dbQueue.read { db in
+        return try await database.read { db in
             let ids = try String.fetchAll(
                 db,
                 sql: "SELECT id FROM memories WHERE id LIKE ? LIMIT 2",
@@ -110,7 +123,7 @@ public actor MemoryStore {
     }
 
     public func recent(limit: Int = 20) async throws -> [Memory] {
-        try await dbQueue.read { db in
+        try await database.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: "SELECT * FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?",
@@ -123,7 +136,7 @@ public actor MemoryStore {
     public func search(query: String, limit: Int = 20) async throws -> [Memory] {
         let fts = Self.sanitizeFTSQuery(query)
         guard !fts.isEmpty else { return [] }
-        return try await dbQueue.read { db in
+        return try await database.read { db in
             let orderedIDs = try String.fetchAll(
                 db,
                 sql: """

@@ -4,6 +4,14 @@ import MCP
 
 struct ToolRegistry: Sendable {
     let store: MemoryStore
+    let activityStore: ActivityStore
+    let identity: MCPClientIdentity
+
+    init(store: MemoryStore, activityStore: ActivityStore, identity: MCPClientIdentity) {
+        self.store = store
+        self.activityStore = activityStore
+        self.identity = identity
+    }
 
     // MARK: - Descriptors
 
@@ -182,12 +190,15 @@ struct ToolRegistry: Sendable {
     func call(name: String, arguments: [String: Value]?) async throws -> CallTool.Result {
         let args = arguments ?? [:]
         switch name {
+        // memory_store's audit row is written inside store.add's transaction.
         case "memory_store":  return try await handleStore(args)
         case "memory_search": return try await handleSearch(args)
         case "memory_recent": return try await handleRecent(args)
         default:              throw MCPError.methodNotFound("Unknown tool: \(name)")
         }
     }
+
+    // MARK: - Handlers
 
     private func handleStore(_ args: [String: Value]) async throws -> CallTool.Result {
         guard let content = args["content"]?.stringValue, !content.isEmpty else {
@@ -217,7 +228,9 @@ struct ToolRegistry: Sendable {
             type: type,
             title: title,
             tags: tags,
-            source: .claude
+            source: .claude,
+            actorKind: .mcp,
+            actorID: await identity.name
         )
         return .init(content: [.plainText("{\"id\":\"\(memory.id.uuidString)\"}")])
     }
@@ -228,12 +241,39 @@ struct ToolRegistry: Sendable {
         }
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let memories = try await store.search(query: query, limit: limit)
+        do {
+            try await activityStore.add(Activity(
+                actorKind: .mcp,
+                actorID: await identity.name,
+                operation: "memory_search",
+                query: query,
+                resultCount: memories.count
+            ))
+        } catch {
+            Log.error(.mcp, "Failed to write activity row", [
+                "operation": "memory_search",
+                "error": String(describing: error),
+            ])
+        }
         return .init(content: [.plainText(try memories.toJSONString())])
     }
 
     private func handleRecent(_ args: [String: Value]) async throws -> CallTool.Result {
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let memories = try await store.recent(limit: limit)
+        do {
+            try await activityStore.add(Activity(
+                actorKind: .mcp,
+                actorID: await identity.name,
+                operation: "memory_recent",
+                resultCount: memories.count
+            ))
+        } catch {
+            Log.error(.mcp, "Failed to write activity row", [
+                "operation": "memory_recent",
+                "error": String(describing: error),
+            ])
+        }
         return .init(content: [.plainText(try memories.toJSONString())])
     }
 }
