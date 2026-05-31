@@ -28,16 +28,17 @@ public actor MemoryStore {
         type: MemoryType,
         title: String? = nil,
         tags: [String] = [],
-        source: MemorySource,
         actorKind: ActorKind,
         actorID: String? = nil
     ) async throws -> Memory {
+        // `source` mirrors the actor identity by construction so the memories
+        // row and its inline audit row always agree on who created the memory.
         let memory = Memory(
             type: type,
             title: title,
             content: content,
             tags: tags,
-            source: source
+            source: actorID
         )
         try await database.write { db in
             try db.execute(
@@ -50,7 +51,7 @@ public actor MemoryStore {
                     memory.type.rawValue,
                     memory.title,
                     Data(memory.content.utf8),
-                    memory.source.rawValue,
+                    memory.source,
                     DateFormat.iso8601.string(from: memory.createdAt),
                     DateFormat.iso8601.string(from: memory.updatedAt),
                 ]
@@ -229,8 +230,6 @@ extension Memory {
             let id = UUID(uuidString: idString),
             let typeString: String = row["type"],
             let type = MemoryType(rawValue: typeString),
-            let sourceString: String = row["source"],
-            let source = MemorySource(rawValue: sourceString),
             let contentData: Data = row["content"],
             let content = String(data: contentData, encoding: .utf8),
             let createdAtString: String = row["created_at"],
@@ -246,7 +245,7 @@ extension Memory {
             title: row["title"],
             content: content,
             tags: tags,
-            source: source,
+            source: row["source"],
             createdAt: createdAt,
             updatedAt: updatedAt
         )

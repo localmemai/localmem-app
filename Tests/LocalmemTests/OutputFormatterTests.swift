@@ -16,7 +16,7 @@ struct OutputFormatterTests {
 
     @Test("printTable renders a header row and one row per memory, using the title when present")
     func tableNonEmptyUsesTitle() throws {
-        let memory = Memory(type: .note, title: "Title Row", content: "Body", source: .user)
+        let memory = Memory(type: .note, title: "Title Row", content: "Body")
         let out = try captureStdout { OutputFormatter.printTable([memory]) }
         #expect(out.contains("ID"))
         #expect(out.contains("TYPE"))
@@ -25,7 +25,7 @@ struct OutputFormatterTests {
 
     @Test("printTable falls back to the content prefix when title is nil")
     func tableFallsBackToContent() throws {
-        let memory = Memory(type: .note, title: nil, content: "preview-fallback", source: .user)
+        let memory = Memory(type: .note, title: nil, content: "preview-fallback")
         let out = try captureStdout { OutputFormatter.printTable([memory]) }
         #expect(out.contains("preview-fallback"))
     }
@@ -37,23 +37,24 @@ struct OutputFormatterTests {
             title: "Coffee",
             content: "flat white, oat",
             tags: ["a", "b"],
-            source: .user
+            source: "claude-code"
         )
         let out = try captureStdout { OutputFormatter.printDetail(memory) }
         #expect(out.contains(memory.id.uuidString))
         #expect(out.contains("preference"))
-        #expect(out.contains("user"))
+        #expect(out.contains("claude-code"))
         #expect(out.contains("Coffee"))
         #expect(out.contains("a, b"))
         #expect(out.contains("flat white, oat"))
     }
 
-    @Test("printDetail omits title and tags lines when neither is present")
+    @Test("printDetail omits title, tags, and source lines when none are present")
     func detailOmitsOptionalLines() throws {
-        let memory = Memory(type: .note, content: "bare content", source: .user)
+        let memory = Memory(type: .note, content: "bare content")
         let out = try captureStdout { OutputFormatter.printDetail(memory) }
         #expect(!out.contains("title:"))
         #expect(!out.contains("tags:"))
+        #expect(!out.contains("source:"))
         #expect(out.contains("bare content"))
     }
 

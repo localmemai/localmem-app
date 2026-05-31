@@ -228,7 +228,6 @@ struct ToolRegistry: Sendable {
             type: type,
             title: title,
             tags: tags,
-            source: .claude,
             actorKind: .mcp,
             actorID: await identity.name
         )

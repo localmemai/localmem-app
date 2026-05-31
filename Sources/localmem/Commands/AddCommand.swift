@@ -31,7 +31,6 @@ struct AddCommand: AsyncParsableCommand {
             type: type,
             title: title,
             tags: tags,
-            source: .user,
             actorKind: .cli
         )
         if json {
