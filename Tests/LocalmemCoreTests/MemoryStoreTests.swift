@@ -14,8 +14,8 @@ struct MemoryStoreTests {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(content: "Hello world", type: .note, actorKind: .cli)
-        _ = try await store.add(content: "Second memory", type: .note, actorKind: .cli)
+        _ = try await store.add(content: "Hello world", type: .note, actorKind: .cli, actorID: ".user")
+        _ = try await store.add(content: "Second memory", type: .note, actorKind: .cli, actorID: ".user")
 
         let recent = try await store.recent(limit: 10)
         #expect(recent.count == 2)
@@ -26,8 +26,8 @@ struct MemoryStoreTests {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(content: "The cat sat on the mat", type: .note, actorKind: .cli)
-        _ = try await store.add(content: "Dogs are loyal", type: .note, actorKind: .cli)
+        _ = try await store.add(content: "The cat sat on the mat", type: .note, actorKind: .cli, actorID: ".user")
+        _ = try await store.add(content: "Dogs are loyal", type: .note, actorKind: .cli, actorID: ".user")
 
         let hits = try await store.search(query: "cat")
         #expect(hits.count == 1)
@@ -46,7 +46,8 @@ struct MemoryStoreTests {
             type: .preference,
             title: "Coffee",
             tags: ["coffee", "preferences"],
-            actorKind: .cli
+            actorKind: .cli,
+            actorID: ".user"
         )
 
         let fetched = try await store.get(id: added.id)
@@ -61,7 +62,7 @@ struct MemoryStoreTests {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let added = try await store.add(content: "to be deleted", type: .note, actorKind: .cli)
+        let added = try await store.add(content: "to be deleted", type: .note, actorKind: .cli, actorID: ".user")
 
         // First delete: row existed, returns true.
         let firstDelete = try await store.delete(id: added.id, actorKind: .cli)
@@ -76,13 +77,29 @@ struct MemoryStoreTests {
         #expect(secondDelete == false)
     }
 
+    @Test func sourceMirrorsActorID() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(
+            content: "marker",
+            type: .note,
+            actorKind: .cli,
+            actorID: ".user"
+        )
+        #expect(added.source == ".user")
+
+        let fetched = try await store.get(id: added.id)
+        #expect(fetched?.source == ".user")
+    }
+
     @Test func countReflectsAdds() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
         #expect(try await store.count() == 0)
-        _ = try await store.add(content: "a", type: .note, actorKind: .cli)
-        _ = try await store.add(content: "b", type: .note, actorKind: .cli)
+        _ = try await store.add(content: "a", type: .note, actorKind: .cli, actorID: ".user")
+        _ = try await store.add(content: "b", type: .note, actorKind: .cli, actorID: ".user")
         #expect(try await store.count() == 2)
     }
 
@@ -90,8 +107,8 @@ struct MemoryStoreTests {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let first = try await store.add(content: "a", type: .note, actorKind: .cli)
-        let second = try await store.add(content: "b", type: .note, actorKind: .cli)
+        let first = try await store.add(content: "a", type: .note, actorKind: .cli, actorID: ".user")
+        let second = try await store.add(content: "b", type: .note, actorKind: .cli, actorID: ".user")
 
         let firstPrefix = String(first.id.uuidString.prefix(8))
         let firstMatches = try await store.findIDs(prefix: firstPrefix)
@@ -111,7 +128,7 @@ struct MemoryStoreTests {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(content: "anything", type: .note, actorKind: .cli)
+        _ = try await store.add(content: "anything", type: .note, actorKind: .cli, actorID: ".user")
         let hits = try await store.search(query: "   ")
         #expect(hits.isEmpty)
     }
@@ -124,7 +141,8 @@ struct MemoryStoreTests {
             content: "uniquely searchable content",
             type: .note,
             tags: ["work", "draft"],
-            actorKind: .cli
+            actorKind: .cli,
+            actorID: ".user"
         )
 
         // Confirm it shows up via FTS before delete.

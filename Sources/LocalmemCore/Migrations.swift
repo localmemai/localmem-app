@@ -13,7 +13,7 @@ enum Migrations {
                     type TEXT NOT NULL,
                     title TEXT,
                     content BLOB NOT NULL,
-                    source TEXT,
+                    source TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )

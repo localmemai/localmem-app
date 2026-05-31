@@ -18,7 +18,8 @@ struct ActivityStoreTests {
         let memory = try await store.add(
             content: "activity trail",
             type: .note,
-            actorKind: .cli
+            actorKind: .cli,
+            actorID: ".user"
         )
 
         let rows = try await activityStore.recent(limit: 10)
@@ -31,7 +32,7 @@ struct ActivityStoreTests {
         let (store, activityStore, url) = try makeStores()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let memory = try await store.add(content: "delete me", type: .note, actorKind: .cli)
+        let memory = try await store.add(content: "delete me", type: .note, actorKind: .cli, actorID: ".user")
         let existed = try await store.delete(
             id: memory.id,
             actorKind: .cli
