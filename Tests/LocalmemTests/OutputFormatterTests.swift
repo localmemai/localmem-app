@@ -16,10 +16,12 @@ struct OutputFormatterTests {
 
     @Test("printTable renders a header row and one row per memory, using the title when present")
     func tableNonEmptyUsesTitle() throws {
-        let memory = Memory(type: .note, title: "Title Row", content: "Body")
+        let memory = Memory(type: .note, title: "Title Row", content: "Body", source: ".user")
         let out = try captureStdout { OutputFormatter.printTable([memory]) }
         #expect(out.contains("ID"))
         #expect(out.contains("TYPE"))
+        #expect(out.contains("SOURCE"))
+        #expect(out.contains(".user"))
         #expect(out.contains("Title Row"))
     }
 

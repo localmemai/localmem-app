@@ -28,8 +28,9 @@ struct LocalmemMCP {
         let transport = StdioTransport()
         try await server.start(transport: transport) { clientInfo, _ in
             await identity.set(clientInfo.name)
+            Log.notice(.mcp, "MCP client connected", ["actor_id": clientInfo.name])
         }
-        Log.notice(.mcp, "Localmem MCP server ready.", ["actor_id": await identity.name])
+        Log.notice(.mcp, "Localmem MCP server ready.")
         await server.waitUntilCompleted()
     }
 }

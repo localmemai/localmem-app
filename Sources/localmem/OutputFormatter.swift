@@ -14,13 +14,14 @@ enum OutputFormatter {
             return
         }
 
-        print("ID        CREATED              TYPE        TITLE")
+        print("ID        CREATED              TYPE        SOURCE          TITLE")
         for memory in memories {
             let shortId = String(memory.id.uuidString.prefix(8)).lowercased()
             let created = tableDateFormatter.string(from: memory.createdAt)
             let type    = memory.type.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)
+            let source  = (memory.source ?? "-").padding(toLength: 14, withPad: " ", startingAt: 0)
             let title   = memory.title ?? String(memory.content.prefix(60))
-            print("\(shortId)  \(created)  \(type)  \(title)")
+            print("\(shortId)  \(created)  \(type)  \(source)  \(title)")
         }
     }
 
