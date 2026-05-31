@@ -21,7 +21,7 @@ Related: [Localmem_Technical_Design.md](Localmem_Technical_Design.md) § Access 
 | Stream | Purpose | Backend | Audience | Durability |
 |---|---|---|---|---|
 | App log | Debug, errors, slow paths, startup notices | `os.Logger` + a rotating JSON-lines file at `~/Library/Logs/Localmem/localmem.log` | Developer / troubleshooting; the UI's log viewer | Bounded by rotation policy (50 MB cap) |
-| Activity log | Audit trail of every memory operation | New SQLite table in `memory.sqlite3` | End user (UI feed, badges) | Durable, capped at 100k rows |
+| Activity log | Audit trail of every memory operation | New SQLite table in `localmem.sqlite3` | End user (UI feed, badges) | Durable, capped at 100k rows |
 
 The streams have different audiences and different lifetimes, so they are stored separately and accessed through different APIs.
 
@@ -55,9 +55,11 @@ Why these numbers: ~10 MB holds tens of thousands of structured records, so a si
 - `LOCALMEM_LOG_FILE_LEVEL` env var overrides the file's minimum level for diagnostic captures (e.g. `debug` while reproducing a bug).
 - Structured fields per line: `ts`, `level`, `category`, `message`, plus arbitrary key/value context.
 
-### Concurrency
+### Concurrency and flushing
 
 The rotating handler is an `actor` that owns the file handle. Log call sites enqueue work without blocking; writes (and rotation) are serialised inside the actor. Rotation is a single atomic sequence within the actor's executor — no other write can interleave.
+
+Short-lived processes need an explicit drain point. The facade exposes `Log.flush() async`, which waits for the rotating file handler to finish all writes enqueued before the flush call. Long-lived MCP processes rarely need it, but CLI commands and tests should call it before process exit / assertion so notice-and-above file records are not lost to fire-and-forget task scheduling.
 
 ### Failure modes
 
@@ -72,7 +74,7 @@ The rotating handler is an `actor` that owns the file handle. Log call sites enq
 
 ## Activity log
 
-A new SQLite table inside `memory.sqlite3`, populated by every MCP tool call and every CLI command that touches memory state.
+A new SQLite table inside `localmem.sqlite3`, populated by every MCP tool call and every CLI command that touches memory state.
 
 ### Storage decision
 
@@ -87,12 +89,12 @@ CREATE TABLE activity (
     actor_kind    TEXT NOT NULL,            -- 'mcp' | 'cli'
     actor_id      TEXT,                     -- MCP client name; null for CLI
     operation     TEXT NOT NULL,            -- 'memory_store' | 'memory_search' | 'memory_recent' | 'memory_delete' | ...
-    status        TEXT NOT NULL,            -- 'ok' | 'error'
+    status        TEXT NOT NULL,            -- 'ok' | 'error' | 'cancelled'
     duration_ms   INTEGER NOT NULL,
     memory_id     TEXT,                     -- target memory if applicable (soft FK — survives delete)
     query         TEXT,                     -- raw search query when operation = 'memory_search'
     result_count  INTEGER,                  -- count for search/recent results
-    error_message TEXT                      -- short error string if status = 'error'
+    error_message TEXT                      -- short error string if status = 'error' or cancellation reason if available
 );
 
 CREATE INDEX idx_activity_occurred_at ON activity(occurred_at DESC);
@@ -144,43 +146,22 @@ public struct ActivityEntry: Codable, Identifiable, Sendable, Equatable {
 }
 
 public enum ActorKind: String, Codable, Sendable { case mcp, cli }
-public enum ActivityStatus: String, Codable, Sendable { case ok, error }
-
-public struct ActivityFilter: Sendable {
-    public var actorKind: ActorKind?
-    public var actorID: String?
-    public var operation: String?
-    public var status: ActivityStatus?
-    public var since: Date?
-    public var until: Date?
-    public var limit: Int
-}
+public enum ActivityStatus: String, Codable, Sendable { case ok, error, cancelled }
 
 public actor ActivityStore {
     // Shares the DatabaseQueue with MemoryStore — see "DB ownership" below.
     public func record(_ entry: ActivityEntry) async throws
     public func recent(limit: Int = 100) async throws -> [ActivityEntry]
-    public func list(filter: ActivityFilter) async throws -> [ActivityEntry]
 }
 
-public struct ActivityRecorder: Sendable {
-    public init(store: ActivityStore, actorKind: ActorKind, actorID: String?)
-    public func record<T>(
-        operation: String,
-        memoryID: UUID? = nil,
-        query: String? = nil,
-        body: () async throws -> RecordResult<T>
-    ) async throws -> T
-}
-
-public struct RecordResult<T> {
-    public let value: T
-    public let memoryID: UUID?     // optional: set if the body produced a memory
-    public let resultCount: Int?   // optional: set for search/recent
+public enum ActivityTiming {
+    public static func durationMs(since start: ContinuousClock.Instant) -> Int
 }
 ```
 
-The recorder swallows nothing — it lets the body's error propagate while still writing an `error` row with a short error message before re-throwing.
+There is intentionally no generic recorder abstraction in v1. Read call sites (`memory_search`, `memory_recent`) record activity with local `do/catch` blocks. The duplication is small, keeps control flow obvious, and avoids making simple CLI commands feel like framework code.
+
+Mutating memory operations that need "memory row + activity row" atomicity use the lower-level database transaction API described in "DB ownership" below instead of calling `MemoryStore.add(...)` and then `ActivityStore.record(...)` as two independent operations.
 
 ### Logging facade
 
@@ -196,15 +177,17 @@ public enum Log {
     public static func notice(_ category: LogCategory, _ message: @autoclosure () -> String, _ context: [String: String] = [:])
     public static func error (_ category: LogCategory, _ message: @autoclosure () -> String, _ context: [String: String] = [:])
     public static func fault (_ category: LogCategory, _ message: @autoclosure () -> String, _ context: [String: String] = [:])
+    public static func flush() async
 }
 
 actor RotatingFileLogHandler {
     init(directory: URL, baseName: String = "localmem.log", maxBytes: Int = 10_000_000, retainedArchives: Int = 5)
     func write(_ line: String) async
+    func flush() async
 }
 ```
 
-The fan-out lives inside `Log` so callers can't accidentally bypass one sink. `@autoclosure` defers string interpolation when a level is filtered out — important because per-request paths call this hot.
+The fan-out lives inside `Log` so callers can't accidentally bypass one sink. `@autoclosure` defers string interpolation when a level is filtered out — important because per-request paths call this hot. `flush()` is intentionally async and file-sink-specific; OSLog has its own buffering and retention semantics.
 
 ## DB ownership
 
@@ -214,6 +197,8 @@ The fan-out lives inside `Log` so callers can't accidentally bypass one sink. `@
 public final class Database: Sendable {
     public init(url: URL) throws  // applies pragmas + migrations
     let queue: DatabaseQueue
+    func read<T>(_ body: @Sendable (GRDB.Database) throws -> T) async throws -> T
+    func write<T>(_ body: @Sendable (GRDB.Database) throws -> T) async throws -> T
 }
 
 public actor MemoryStore   { public init(database: Database) }
@@ -222,23 +207,28 @@ public actor ActivityStore { public init(database: Database) }
 
 A single `Database` is created once at process startup. The default public initialiser on each store still exists as a convenience that opens the default URL.
 
+The `Database.write` closure is the boundary for operations that must commit memory state and activity state atomically. For example, `memory_store` should insert the `memories` row, insert the `activity` row, and let SQLite commit or roll back both together. Read-only activity rows (`memory_search`, `memory_recent`) are recorded after the read with explicit `do/catch` blocks; if that audit insert fails, the command surfaces that error just like any other local persistence failure.
+
 ## Integration
 
 ### MCP server
 
 - On `initialize`, capture `clientInfo.name` (verify swift-sdk exposes it on the request handler; if not, fall back to `LOCALMEM_CLIENT_ID` env var, then `"unknown-mcp"`).
-- `ToolRegistry.call(...)` dispatches through an `ActivityRecorder` configured with the captured client name.
-- Each handler returns a `RecordResult` populating `memoryID` (for store/delete) or `resultCount` (for search/recent) so the recorder can persist those without inspecting the result content itself.
+- `ToolRegistry.call(...)` receives an `ActivityStore` configured with the captured client name, plus access to the shared `Database` for transactional mutations.
+- Each read handler records `resultCount` directly after fetching results.
+- Each mutating handler (`memory_store`, future `memory_delete`) records activity in the same `Database.write` transaction as the memory mutation, populating `memoryID` directly.
+- `memory_store` continues to write the existing `Memory.source` value for backward compatibility, but the activity row is the authoritative source for the MCP client identity. Do not overload `Memory.source` with client names.
 
 ### CLI
 
-- `LocalmemCLI.main()` constructs a single `ActivityRecorder` with `actorKind = .cli`, `actorID = nil`, and threads it into commands.
-- Each command's `run()` is wrapped in the recorder. Pure read-only commands like `path` and `status` may opt out — they reveal nothing about the user's memories and aren't interesting for an audit feed.
+- Memory-touching commands construct an `ActivityStore` with `actorKind = .cli`, `actorID = nil`.
+- Search/list commands use explicit `do/catch` blocks to record `ok`, `error`, or `cancelled`. Mutating commands use transaction-aware helpers. Pure read-only commands like `path` and `status` may opt out — they reveal nothing about the user's memories and aren't interesting for an audit feed.
+- CLI entrypoints call `await Log.flush()` before exit when they emitted file-backed log records.
 
 ## UI consumers (future work, not in this milestone)
 
-- Activity feed view: `ActivityStore.list(filter:)` driving a SwiftUI list with date / actor / operation / status columns; tap row to expand.
-- Per-memory access trail: `ActivityFilter(memoryID: x)` for "who has touched this memory" UX.
+- Activity feed view: a future filtered query API driving a SwiftUI list with date / actor / operation / status columns; tap row to expand.
+- Per-memory access trail: a future `memoryID` filter for "who has touched this memory" UX.
 - "Last accessed by …" badges on memories: a join over the latest activity row per memory_id.
 
 None of those views ship in this milestone. The data they need must, however, be present from day one — that is the whole point of doing this work now rather than after the UI lands.
@@ -248,14 +238,15 @@ None of those views ship in this milestone. The data they need must, however, be
 Numbered tasks, intended to land as small, separately-reviewable commits.
 
 1. **Migration v2: `activity` table + cap trigger.** Update `Sources/LocalmemCore/Migrations.swift`. Add a migration test that asserts the table, indexes, and trigger are present.
-2. **`Activity.swift` model.** `ActivityEntry`, `ActorKind`, `ActivityStatus`, `ActivityFilter`. Codable + Sendable.
+2. **`Activity.swift` model.** `ActivityEntry`, `ActorKind`, `ActivityStatus`. Codable + Sendable.
 3. **`Database` wrapper.** Extract pragma + migrator handling from `MemoryStore` into a `Database` type that both stores consume. Update `MemoryStore.init` overloads; preserve the existing public no-arg init.
-4. **`ActivityStore` actor.** `record`, `recent`, `list(filter:)`. Unit-tested against an in-memory DB.
-5. **`RotatingFileLogHandler` + `Log.swift` facade.** Implement the rotating actor (size check, atomic rotation, lazy reopen). Wire the facade to fan out into both `os.Logger` and the handler. Replace `LocalmemMCP.log(_:)`'s direct stderr write with the facade — stderr stays only for fatal/startup messages. Tests cover: write under threshold, rotation at threshold, retention dropping oldest, recovery after external delete, concurrent writes from multiple tasks.
-6. **`ActivityRecorder` helper.** Closure-wrapping API as specified above. Tests cover ok / error / cancellation paths.
-7. **MCP wiring.** Capture client name on `initialize`. Wrap every dispatch in `ToolRegistry.call`. Add an integration test that runs `memory_store` + `memory_search` and asserts the corresponding activity rows.
-8. **CLI wiring.** Wrap every memory-touching command. Add a CLI test that runs `localmem add` and asserts an activity row.
-9. **Docs update.** Append the schema and behaviour notes to `docs/Localmem_Technical_Design.md` § Access Transparency, with a back-link to this file.
+4. **`ActivityStore` actor.** `record`, `recent`. Unit-tested against an in-memory DB.
+5. **Transactional mutation helpers.** Add shared helpers for memory mutations that must commit their activity row in the same `Database.write` transaction. Tests cover rollback: force an activity insert failure and assert the memory mutation is not committed.
+6. **`RotatingFileLogHandler` + `Log.swift` facade.** Implement the rotating actor (size check, atomic rotation, lazy reopen, `flush()`). Wire the facade to fan out into both `os.Logger` and the handler. Replace `LocalmemMCP.log(_:)`'s direct stderr write with the facade — stderr stays only for fatal/startup messages. Tests cover: write under threshold, rotation at threshold, retention dropping oldest, recovery after external delete, concurrent writes from multiple tasks, flush before assertion.
+7. **Explicit read recording.** Add direct `do/catch` activity recording for `memory_search` and `memory_recent` in CLI and MCP code paths. Tests cover ok / error / cancellation paths where practical.
+8. **MCP wiring.** Capture client name on `initialize`. Record reads explicitly; wrap mutations in transaction-aware helpers. Add an integration test that runs `memory_store` + `memory_search` and asserts the corresponding activity rows, including atomicity for `memory_store`.
+9. **CLI wiring.** Wrap every memory-touching command. Add a CLI test that runs `localmem add` and asserts an activity row. Add a smoke test or unit seam for `Log.flush()` on CLI shutdown.
+10. **Docs update.** Append the schema and behaviour notes to `docs/Localmem_Technical_Design.md` § Access Transparency, with a back-link to this file.
 
 Each step compiles and tests green on its own.
 
@@ -264,3 +255,5 @@ Each step compiles and tests green on its own.
 - **`clientInfo` exposure** — confirm `modelcontextprotocol/swift-sdk` ≥ 0.7.0 surfaces `initialize.clientInfo.name` on the server side. If not, document the env-var fallback explicitly and file a follow-up.
 - **CLI vs MCP source field** — today `Memory.source` is `user | claude | import`. Once the activity log carries `actor_kind / actor_id`, `source` becomes partially redundant. Defer reconciling them until the UI work surfaces a real conflict; both are cheap to keep.
 - **MCP `memory_delete`** — currently CLI-only per commit `b838742`. When MCP delete lands behind access control, it inherits this design with no schema change.
+- **Verbatim query visibility** — v1 stores search queries as local audit data. Before the desktop UI exposes the feed, decide whether to add copy that makes this obvious to users, or a setting that hashes / suppresses query text for shared-machine workflows.
+- **Activity cap trigger cost** — seed a test database at or above 100k rows and measure insert latency before shipping. If the trigger is too expensive, replace the `COUNT(*)` trigger condition with a cheaper periodic prune strategy.

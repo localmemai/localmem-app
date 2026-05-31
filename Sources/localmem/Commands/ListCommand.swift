@@ -15,8 +15,25 @@ struct ListCommand: AsyncParsableCommand {
     var json: Bool = false
 
     func run() async throws {
-        let store = try MemoryStore()
+        let database = try LocalmemDatabase()
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+
         let memories = try await store.recent(limit: limit)
+        do {
+            try await activityStore.add(Activity(
+                actorKind: .cli,
+                actorID: ".user",
+                operation: "memory_recent",
+                resultCount: memories.count
+            ))
+        } catch {
+            Log.error(.cli, "Failed to write activity row", [
+                "operation": "memory_recent",
+                "error": String(describing: error),
+            ])
+        }
+
         if json {
             try OutputFormatter.printJSON(memories)
         } else {

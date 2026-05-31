@@ -5,8 +5,11 @@ import MCP
 @main
 struct LocalmemMCP {
     static func main() async throws {
-        let store = try MemoryStore()
-        let registry = ToolRegistry(store: store)
+        let database = try LocalmemDatabase()
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+        let identity = MCPClientIdentity()
+        let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
 
         let server = Server(
             name: "localmem",
@@ -23,13 +26,10 @@ struct LocalmemMCP {
         }
 
         let transport = StdioTransport()
-        try await server.start(transport: transport)
-        log("Localmem MCP server ready.")
+        try await server.start(transport: transport) { clientInfo, _ in
+            await identity.set(clientInfo.name)
+        }
+        Log.notice(.mcp, "Localmem MCP server ready.", ["actor_id": await identity.name])
         await server.waitUntilCompleted()
-    }
-
-    /// stdout is the MCP transport — diagnostics must go to stderr only.
-    static func log(_ message: String) {
-        FileHandle.standardError.write(Data("[localmem-mcp] \(message)\n".utf8))
     }
 }

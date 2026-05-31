@@ -27,7 +27,7 @@ enum OutputFormatter {
     static func printDetail(_ memory: Memory) {
         print("id:         \(memory.id.uuidString)")
         print("type:       \(memory.type.rawValue)")
-        print("source:     \(memory.source.rawValue)")
+        if let source = memory.source { print("source:     \(source)") }
         print("created_at: \(memory.createdAt)")
         print("updated_at: \(memory.updatedAt)")
         if let title = memory.title { print("title:      \(title)") }

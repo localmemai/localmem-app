@@ -6,7 +6,10 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
     public var title: String?
     public var content: String
     public var tags: [String]
-    public var source: MemorySource
+    /// Free-form identifier for whoever wrote the row. Mirrors `activity.actor_id`
+    /// for the inline audit row created at the same time — nil for CLI writes
+    /// that don't set `LOCALMEM_CLIENT_ID`, the MCP client name otherwise.
+    public var source: String?
     public let createdAt: Date
     public var updatedAt: Date
 
@@ -16,7 +19,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         title: String? = nil,
         content: String,
         tags: [String] = [],
-        source: MemorySource,
+        source: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -33,8 +36,4 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
 
 public enum MemoryType: String, Codable, Sendable, CaseIterable {
     case fact, preference, decision, project, note
-}
-
-public enum MemorySource: String, Codable, Sendable {
-    case user, claude, `import`
 }

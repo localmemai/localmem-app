@@ -41,7 +41,11 @@ struct DeleteCommand: AsyncParsableCommand {
             }
         }
 
-        let existed = try await store.delete(id: memory.id)
+        let existed = try await store.delete(
+            id: memory.id,
+            actorKind: .cli,
+            actorID: ".user"
+        )
         if existed {
             print("Deleted \(memory.id.uuidString).")
         } else {

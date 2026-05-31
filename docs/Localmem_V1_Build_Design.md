@@ -65,7 +65,7 @@ Target platform: macOS 26+ (Tahoe). Swift 6+. SwiftPM platform pin: `.macOS(.v26
 
 ### Location
 ```
-~/Library/Application Support/Localmem/memory.sqlite3
+~/Library/Application Support/Localmem/localmem.sqlite3
 ```
 
 Created on first run if missing. The directory is also created if missing.
