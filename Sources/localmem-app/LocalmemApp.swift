@@ -20,13 +20,34 @@ struct LocalmemApp: App {
     }
 }
 
+// MARK: - Fake model (Phase 3 swaps this for LocalmemCore.Memory)
+
+struct MemoryListItem: Identifiable, Hashable {
+    let id = UUID()
+    let title: String
+}
+
+let sampleItems: [MemoryListItem] = [
+    .init(title: "Coffee preference"),
+    .init(title: "Localmem brand casing"),
+    .init(title: "Modern frameworks preference"),
+]
+
 struct ContentView: View {
+    // The selection lives here because two children need to see it:
+    // SidebarView writes to it, DetailView reads from it.
+    @State private var selection: MemoryListItem.ID?
+
+    private var selectedItem: MemoryListItem? {
+        sampleItems.first { $0.id == selection }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             NavigationSplitView {
-                SidebarView()
+                SidebarView(items: sampleItems, selection: $selection)
             } detail: {
-                DetailView()
+                DetailView(item: selectedItem)
                     .toolbar {
                         ToolbarItem(placement: .navigation) {
                             Button {
@@ -49,18 +70,42 @@ struct ContentView: View {
 }
 
 struct SidebarView: View {
+    let items: [MemoryListItem]
+    @Binding var selection: MemoryListItem.ID?
+
     var body: some View {
-        List {
-            Text("Memory 1")
-            Text("Memory 2")
+        List(items, selection: $selection) { item in
+            SidebarRow(item: item)
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 260)
     }
 }
 
-struct DetailView: View {
+struct SidebarRow: View {
+    let item: MemoryListItem
     var body: some View {
-        Text("Select a memory")
+        HStack(spacing: 10) {
+            Circle().fill(.blue).frame(width: 10, height: 10)
+            Text(item.title).lineLimit(1)
+        }
+    }
+}
+
+struct DetailView: View {
+    let item: MemoryListItem?
+
+    var body: some View {
+        if let item {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(item.title).font(.title2.weight(.semibold))
+                Text("Body coming in Phase 4.").foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ContentUnavailableView("Select a memory", systemImage: "doc.text")
+        }
     }
 }
 
@@ -68,11 +113,11 @@ struct StatusBarView: View {
     var body: some View {
         HStack {
             Circle().fill(.green).frame(width: 8, height: 8)
-            Text("Connected").font(.footnote)
+            Text("Connected").font(.callout)
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(.regularMaterial)
     }
 }
