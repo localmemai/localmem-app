@@ -11,6 +11,9 @@ struct SetupCommand: AsyncParsableCommand {
     @Flag(name: .long, inversion: .prefixedNo, help: "Install agent instruction files (~/.localmem/AGENTS.md and per-agent imports).")
     var instructions: Bool = true
 
+    @Flag(name: .long, inversion: .prefixedNo, help: "Pre-approve Localmem's tools so clients don't prompt on every call.")
+    var preauthorize: Bool = true
+
     func run() async throws {
         let binaryPath = try BinaryLocator.mcpServerPath()
 
@@ -37,6 +40,42 @@ struct SetupCommand: AsyncParsableCommand {
         let installer = try InstructionsInstaller()
         let results = try installer.installAll()
         return results.map { .init(name: $0.name, outcome: $0.outcome) }
+    }
+
+    /// One client's full setup pass: install check, register, then pre-authorize
+    /// if registration landed and the caller didn't opt out. Returns the data
+    /// the report renders — never throws.
+    static func processClient(
+        _ registrar: ClientRegistrar,
+        binaryPath: String,
+        preauthorize: Bool
+    ) -> (Result<RegistrationOutcome, Error>, Result<PreauthorizationOutcome, Error>?) {
+        guard registrar.isInstalled() else {
+            return (.success(.skipped(reason: "client not detected")), nil)
+        }
+
+        let registration: Result<RegistrationOutcome, Error>
+        do {
+            registration = .success(try registrar.register(binaryPath: binaryPath))
+        } catch {
+            registration = .failure(error)
+        }
+
+        // Skip pre-auth when the user opted out, when registration failed, or
+        // when registration was a no-op (.skipped) — writing auto-approve into
+        // a file the client won't load just adds noise.
+        guard preauthorize, case .success(let outcome) = registration else {
+            return (registration, nil)
+        }
+        if case .skipped = outcome { return (registration, nil) }
+
+        let preauth: Result<PreauthorizationOutcome, Error>
+        do {
+            preauth = .success(try registrar.preauthorize(tools: Localmem.preauthorizedToolNames))
+        } catch {
+            preauth = .failure(error)
+        }
+        return (registration, preauth)
     }
 
     // MARK: - Streaming (interactive terminal)
@@ -69,27 +108,23 @@ struct SetupCommand: AsyncParsableCommand {
                 }
             }
 
-            // Do the registration off the main task so the spinner can animate.
+            // Do the work off the main task so the spinner can animate.
             let r = registrar
-            let outcome: Result<RegistrationOutcome, Error>
-            do {
-                let value = try await Task.detached {
-                    guard r.isInstalled() else {
-                        return RegistrationOutcome.skipped(reason: "client not detected")
-                    }
-                    return try r.register(binaryPath: binaryPath)
-                }.value
-                outcome = .success(value)
-            } catch {
-                outcome = .failure(error)
-            }
+            let preauth = preauthorize
+            let result = await Task.detached {
+                Self.processClient(r, binaryPath: binaryPath, preauthorize: preauth)
+            }.value
 
             spinTask.cancel()
 
             // Overwrite the spinner line with the completion line + newline.
             // After this, the cursor is on a fresh empty line ready for the
             // next spinner.
-            let row = SetupReport.Row(name: name, outcome: outcome)
+            let row = SetupReport.Row(
+                name: name,
+                outcome: result.0,
+                preauthorization: result.1
+            )
             let completion = SetupReport.formatRow(row)
             FileHandle.standardOutput.write(Data("\r\(completion)\u{001B}[K\n".utf8))
             rows.append(row)
@@ -120,17 +155,16 @@ struct SetupCommand: AsyncParsableCommand {
     ) async throws {
         var rows: [SetupReport.Row] = []
         for registrar in registrars {
-            let outcome: Result<RegistrationOutcome, Error>
-            if !registrar.isInstalled() {
-                outcome = .success(.skipped(reason: "client not detected"))
-            } else {
-                do {
-                    outcome = .success(try registrar.register(binaryPath: binaryPath))
-                } catch {
-                    outcome = .failure(error)
-                }
-            }
-            rows.append(.init(name: registrar.displayName, outcome: outcome))
+            let (outcome, preauth) = Self.processClient(
+                registrar,
+                binaryPath: binaryPath,
+                preauthorize: preauthorize
+            )
+            rows.append(.init(
+                name: registrar.displayName,
+                outcome: outcome,
+                preauthorization: preauth
+            ))
         }
         var report = SetupReport(rows: rows)
         if instructions {

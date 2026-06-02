@@ -196,8 +196,8 @@ Antigravity needs one extra test: a `mcpServers.localmem.includeTools` array set
 5. Update `localmem status` to report pre-auth state.
 6. Update `AGENTS.md` to mention that tools will run without prompts after `localmem setup`.
 
-## 8. Open questions
+## 8. Resolved questions
 
-- **Should we also write a deny entry for `mcp__localmem__memory_delete` proactively** in Claude Code / Cursor / Codex, so when that tool eventually ships it still prompts even if the user updated Localmem without re-running setup? Probably yes — adds belt-and-braces.
-- **Should `localmem status` offer a `--fix` mode** that re-runs pre-auth without re-registering? Lower priority but useful if a user manually cleared their allowlist.
-- **Antigravity `trust: true` policy** — revisit before `memory_delete` ships. Linked to the deferred MCP-delete work in b838742.
+- **Proactive deny entry for `mcp__localmem__memory_delete`** — not needed. Re-running `localmem setup` after upgrading is the supported path; we don't pre-write deny rules for tools that don't exist yet.
+- **`localmem status --fix` mode** — not needed. If a user wants to refresh pre-auth state, they re-run `localmem setup`. Single entry point, no second code path to maintain.
+- **Antigravity `trust: true` policy revisit** — not yet. Re-evaluate when `memory_delete` actually ships, not preemptively.

@@ -52,12 +52,16 @@ struct StatusCommand: AsyncParsableCommand {
                 line = "– not installed"
             } else if !r.isRegistered() {
                 line = "✗ installed but NOT registered — run `localmem setup`"
-            } else if let path = r.registeredBinaryPath() {
-                line = path == canonical
-                    ? "✓ registered · path OK"
-                    : "↺ registered · path STALE — run `localmem setup`"
             } else {
-                line = "✓ registered · path unknown"
+                let registrationDetail: String
+                if let path = r.registeredBinaryPath() {
+                    registrationDetail = path == canonical
+                        ? "✓ registered · path OK"
+                        : "↺ registered · path STALE — run `localmem setup`"
+                } else {
+                    registrationDetail = "✓ registered · path unknown"
+                }
+                line = "\(registrationDetail) · \(preauthLabel(for: r))"
             }
             let name = r.displayName.padding(toLength: 18, withPad: " ", startingAt: 0)
             print("  \(name) \(line)")
@@ -65,5 +69,14 @@ struct StatusCommand: AsyncParsableCommand {
 
         print("")
         print("Canonical binary: \(canonical)")
+    }
+
+    private func preauthLabel(for registrar: ClientRegistrar) -> String {
+        switch registrar.preauthorizationState(tools: Localmem.preauthorizedToolNames) {
+        case .authorized:           return "auto-approved"
+        case .partial(let missing): return "auto-approved (partial, \(missing) missing — re-run setup)"
+        case .notAuthorized:        return "prompts each call — re-run setup"
+        case .unsupported:          return "no pre-auth mechanism"
+        }
     }
 }

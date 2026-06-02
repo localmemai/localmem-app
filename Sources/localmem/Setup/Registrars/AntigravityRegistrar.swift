@@ -2,15 +2,18 @@ import Foundation
 
 struct AntigravityRegistrar: ClientRegistrar {
     let displayName = "Antigravity"
+    let homeDirectory: URL
+
+    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.homeDirectory = homeDirectory
+    }
 
     private var configURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini/config/mcp_config.json")
+        homeDirectory.appendingPathComponent(".gemini/config/mcp_config.json")
     }
 
     private var geminiDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini")
+        homeDirectory.appendingPathComponent(".gemini")
     }
 
     func isInstalled() -> Bool {
@@ -43,5 +46,36 @@ struct AntigravityRegistrar: ClientRegistrar {
 
     func registeredBinaryPath() -> String? {
         JSONConfig.readMcpEntry(at: configURL, serverName: "localmem")?["command"] as? String
+    }
+
+    // MARK: - Pre-authorization
+    //
+    // Per-tool `alwaysAllow` is documented but not honored as of March 2026.
+    // Server-wide `trust: true` is the only working mechanism. Acceptable
+    // because every tool currently on this server is non-destructive; revisit
+    // when `memory_delete` ships (resolved §8 — not preemptively).
+    //
+    // `tools` is ignored — this client only supports server-wide trust.
+
+    func preauthorize(tools _: [String]) throws -> PreauthorizationOutcome {
+        var wasTrusted = false
+        let changed = try JSONConfig.update(at: configURL) { current in
+            var next = current
+            var servers = (next["mcpServers"] as? [String: Any]) ?? [:]
+            var entry = (servers["localmem"] as? [String: Any]) ?? [:]
+            wasTrusted = (entry["trust"] as? Bool) == true
+            entry["trust"] = true
+            servers["localmem"] = entry
+            next["mcpServers"] = servers
+            return next
+        }
+        if !changed { return .alreadyAuthorized(scope: .server) }
+        return wasTrusted ? .alreadyAuthorized(scope: .server) : .authorized(scope: .server)
+    }
+
+    func preauthorizationState(tools _: [String]) -> PreauthorizationState {
+        guard let entry = JSONConfig.readMcpEntry(at: configURL, serverName: "localmem")
+        else { return .notAuthorized }
+        return (entry["trust"] as? Bool) == true ? .authorized : .notAuthorized
     }
 }
