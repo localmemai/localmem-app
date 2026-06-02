@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "LocalmemCore", targets: ["LocalmemCore"]),
         .executable(name: "localmem", targets: ["localmem"]),
         .executable(name: "localmem-mcp", targets: ["localmem-mcp"]),
+        .executable(name: "localmem-app", targets: ["localmem-app"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.0"),
@@ -41,6 +42,11 @@ let package = Package(
                 "LocalmemCore",
                 .product(name: "MCP", package: "swift-sdk"),
             ]
+        ),
+        .executableTarget(
+            name: "localmem-app",
+            dependencies: ["LocalmemCore"],
+            path: "Sources/localmem-app"
         ),
         .testTarget(
             name: "LocalmemCoreTests",
