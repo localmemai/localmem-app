@@ -44,7 +44,7 @@ struct DeleteCommand: AsyncParsableCommand {
         let existed = try await store.delete(
             id: memory.id,
             actorKind: .cli,
-            actorID: ".user"
+            actorID: "user"
         )
         if existed {
             print("Deleted \(memory.id.uuidString).")
@@ -57,7 +57,7 @@ struct DeleteCommand: AsyncParsableCommand {
 
     // MARK: - Helpers
 
-    private func resolve(idOrPrefix: String, store: MemoryStore) async throws -> Memory {
+    func resolve(idOrPrefix: String, store: MemoryStore) async throws -> Memory {
         if let uuid = UUID(uuidString: idOrPrefix),
            let memory = try await store.get(id: uuid) {
             return memory

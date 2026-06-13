@@ -28,6 +28,17 @@ enum Migrations {
                 )
                 """)
 
+            // Per-memory agent access (denylist). Empty set = visible to every
+            // agent, including ones added later. We persist only the exclusions.
+            try db.execute(sql: """
+                CREATE TABLE memory_agent_exclusions (
+                    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                    agent_id TEXT NOT NULL,
+                    PRIMARY KEY (memory_id, agent_id)
+                )
+                """)
+            try db.execute(sql: "CREATE INDEX idx_excl_agent ON memory_agent_exclusions(agent_id)")
+
             try db.execute(sql: "CREATE INDEX idx_memories_created_at ON memories(created_at DESC)")
 
             try db.execute(sql: """

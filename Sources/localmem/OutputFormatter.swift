@@ -33,6 +33,7 @@ enum OutputFormatter {
         print("updated_at: \(memory.updatedAt)")
         if let title = memory.title { print("title:      \(title)") }
         if !memory.tags.isEmpty { print("tags:       \(memory.tags.joined(separator: ", "))") }
+        if !memory.excludedAgents.isEmpty { print("excluded:   \(memory.excludedAgents.joined(separator: ", "))") }
         print("---")
         print(memory.content)
     }

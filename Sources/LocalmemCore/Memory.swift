@@ -6,6 +6,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
     public var title: String?
     public var content: String
     public var tags: [String]
+    public var excludedAgents: [String]
     /// Free-form identifier for whoever wrote the row. Mirrors `activity.actor_id`
     /// for the inline audit row created at the same time — nil for CLI writes
     /// that don't set `LOCALMEM_CLIENT_ID`, the MCP client name otherwise.
@@ -19,6 +20,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         title: String? = nil,
         content: String,
         tags: [String] = [],
+        excludedAgents: [String] = [],
         source: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -28,6 +30,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         self.title = title
         self.content = content
         self.tags = tags
+        self.excludedAgents = excludedAgents
         self.source = source
         self.createdAt = createdAt
         self.updatedAt = updatedAt

@@ -10,6 +10,7 @@ struct LocalmemCLI: AsyncParsableCommand {
             SearchCommand.self,
             ShowCommand.self,
             AddCommand.self,
+            UpdateCommand.self,
             DeleteCommand.self,
             SetupCommand.self,
             StatusCommand.self,
