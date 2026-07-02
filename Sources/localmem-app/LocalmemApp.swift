@@ -490,6 +490,7 @@ struct ContentView: View {
     @AppStorage("seenWizard") private var seenWizard = false
     @State private var showWizard = false
     @State private var wizardStart: WizardStep = .welcome
+    @State private var showMockWizard = false
 
     var body: some View {
         // Two-level layout so the status bar spans the full window width:
@@ -551,7 +552,8 @@ struct ContentView: View {
                         jumpToMemories: {
                             selectedComingSoon = nil
                             withAnimation(.snappy) { section = .memories }
-                        }
+                        },
+                        onTestWizard: { showMockWizard = true }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay {
@@ -596,6 +598,9 @@ struct ContentView: View {
                 seenWizard = true
                 showWizard = false
             }
+        }
+        .sheet(isPresented: $showMockWizard) {
+            SetupWizardView(isPresented: $showMockWizard)
         }
         .sheet(item: $sheet) { kind in
             switch kind {
@@ -871,6 +876,7 @@ struct ContentArea: View {
     let onOpenAuditMemory: (Memory.ID) -> Void
     @Binding var auditMemoryFilter: Memory.ID?
     let jumpToMemories: () -> Void
+    let onTestWizard: () -> Void
 
     var body: some View {
         Group {
@@ -882,7 +888,8 @@ struct ContentArea: View {
                     OverviewView(
                         memoryVM: memoryVM,
                         statusVM: statusVM,
-                        jumpToMemories: jumpToMemories
+                        jumpToMemories: jumpToMemories,
+                        onTestWizard: onTestWizard
                     )
                 case .memories:
                     MemoriesView(
@@ -927,6 +934,7 @@ struct OverviewView: View {
     let memoryVM: MemoryStoreViewModel?
     let statusVM: VaultStatusViewModel?
     let jumpToMemories: () -> Void
+    let onTestWizard: () -> Void
 
     var body: some View {
         ScrollView {
@@ -934,7 +942,13 @@ struct OverviewView: View {
                 PageHeader(
                     title: "Overview",
                     subtitle: "Recent memories and agent activity."
-                )
+                ) {
+                    Button {
+                        onTestWizard()
+                    } label: {
+                        Label("Test Setup Wizard", systemImage: "wand.and.stars")
+                    }
+                }
 
                 StatsStrip(statusVM: statusVM)
 
