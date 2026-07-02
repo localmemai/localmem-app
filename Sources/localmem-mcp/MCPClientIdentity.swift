@@ -9,7 +9,7 @@ actor MCPClientIdentity {
     private let fallback: String
 
     init(fallback: String = ProcessInfo.processInfo.environment["LOCALMEM_CLIENT_ID"] ?? "unknown-mcp") {
-        self.fallback = fallback
+        self.fallback = Self.normalized(fallback)
     }
 
     var name: String {
@@ -18,6 +18,25 @@ actor MCPClientIdentity {
 
     func set(_ name: String?) {
         guard let name, !name.isEmpty else { return }
-        captured = name
+        captured = Self.normalized(name)
+    }
+
+    static func normalized(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased()
+        switch lowered {
+        case "codex", "codex-cli", "codex-mcp-client", "openai-codex":
+            return "codex"
+        case "claude", "claude-code", "claude_code", "claude code":
+            return "claude-code"
+        case "claude-desktop", "claude_desktop", "claude desktop":
+            return "claude-desktop"
+        case "cursor", "cursor-mcp-client", "cursor mcp client":
+            return "cursor"
+        case "antigravity", "antigravity-client", "antigravity_client":
+            return "antigravity-client"
+        default:
+            return trimmed.isEmpty ? "unknown-mcp" : trimmed
+        }
     }
 }

@@ -83,7 +83,7 @@ struct UpdateCommand: AsyncParsableCommand {
 
     /// Resolve a full UUID or unique prefix to a Memory. Same logic as
     /// `ShowCommand.resolve` — kept inline to avoid a sub-package helper.
-    private func resolve(idOrPrefix: String, store: MemoryStore) async throws -> Memory {
+    func resolve(idOrPrefix: String, store: MemoryStore) async throws -> Memory {
         if let uuid = UUID(uuidString: idOrPrefix),
            let memory = try await store.get(id: uuid) {
             return memory

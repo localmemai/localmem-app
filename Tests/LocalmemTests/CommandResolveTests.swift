@@ -4,11 +4,11 @@ import ArgumentParser
 @testable import LocalmemCore
 @testable import localmem
 
-/// Both `delete` and `show` share the same id-or-prefix resolution: try the
-/// argument as a full UUID first, then fall back to a case-insensitive prefix
-/// lookup, surfacing the "no match" and "ambiguous prefix" errors as
-/// `ValidationError`s. The two commands carry identical resolve helpers, so we
-/// exercise both against the same in-memory store fixtures to lock the
+/// `delete`, `show`, and `update` share the same id-or-prefix resolution: try
+/// the argument as a full UUID first, then fall back to a case-insensitive
+/// prefix lookup, surfacing the "no match" and "ambiguous prefix" errors as
+/// `ValidationError`s. The three commands carry identical resolve helpers, so we
+/// exercise each against the same in-memory store fixtures to lock the
 /// branches down.
 @Suite("Command resolve(idOrPrefix:store:)")
 struct CommandResolveTests {
@@ -130,6 +130,68 @@ struct CommandResolveTests {
         _ = try await store.add(content: "b", type: .note, actorKind: .cli, actorID: "user")
 
         let cmd = try ShowCommand.parse([""])
+        await #expect(throws: ValidationError.self) {
+            _ = try await cmd.resolve(idOrPrefix: "", store: store)
+        }
+    }
+
+    // MARK: - UpdateCommand
+
+    @Test("UpdateCommand.resolve returns the memory for a valid, present UUID")
+    func updateResolvesFullUUID() async throws {
+        let (store, url) = try Self.makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(content: "x", type: .note, actorKind: .cli, actorID: "user")
+        let cmd = try UpdateCommand.parse([added.id.uuidString])
+        let resolved = try await cmd.resolve(idOrPrefix: added.id.uuidString, store: store)
+        #expect(resolved.id == added.id)
+    }
+
+    @Test("UpdateCommand.resolve handles a syntactically valid UUID that doesn't exist")
+    func updateResolvesAbsentUUIDViaPrefixPath() async throws {
+        let (store, url) = try Self.makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let absent = UUID().uuidString
+        let cmd = try UpdateCommand.parse([absent])
+        await #expect(throws: ValidationError.self) {
+            _ = try await cmd.resolve(idOrPrefix: absent, store: store)
+        }
+    }
+
+    @Test("UpdateCommand.resolve returns the unique match for an unambiguous prefix")
+    func updateResolvesUniquePrefix() async throws {
+        let (store, url) = try Self.makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let added = try await store.add(content: "x", type: .note, actorKind: .cli, actorID: "user")
+        let prefix = String(added.id.uuidString.prefix(8))
+        let cmd = try UpdateCommand.parse([prefix])
+        let resolved = try await cmd.resolve(idOrPrefix: prefix, store: store)
+        #expect(resolved.id == added.id)
+    }
+
+    @Test("UpdateCommand.resolve throws ValidationError when no memory matches the prefix")
+    func updateThrowsOnNoMatch() async throws {
+        let (store, url) = try Self.makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let cmd = try UpdateCommand.parse(["zzz"])
+        await #expect(throws: ValidationError.self) {
+            _ = try await cmd.resolve(idOrPrefix: "zzz", store: store)
+        }
+    }
+
+    @Test("UpdateCommand.resolve throws ValidationError when the prefix matches multiple memories")
+    func updateThrowsOnAmbiguous() async throws {
+        let (store, url) = try Self.makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "a", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "b", type: .note, actorKind: .cli, actorID: "user")
+
+        let cmd = try UpdateCommand.parse([""])
         await #expect(throws: ValidationError.self) {
             _ = try await cmd.resolve(idOrPrefix: "", store: store)
         }

@@ -437,4 +437,90 @@ struct MemoryStoreTests {
         }
         #expect(rows == 0)
     }
+
+    // MARK: - Agent-centric access management
+
+    @Test func memoriesExcludingListsBlockedForAgent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let hidden = try await store.add(content: "hidden from codex", type: .note,
+                                         excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "visible to all", type: .note, actorKind: .cli, actorID: "user")
+
+        let blocked = try await store.memoriesExcluding(agent: "codex")
+        #expect(blocked.map(\.id) == [hidden.id])
+        #expect(try await store.memoriesExcluding(agent: "cursor").isEmpty)
+    }
+
+    @Test func blockedCountsReportFilteredReads() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "alpha hidden", type: .note,
+                                excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "alpha visible", type: .note,
+                                actorKind: .cli, actorID: "user")
+
+        #expect(try await store.blockedRecentCount(limit: 10, requestingAgent: "codex") == 1)
+        #expect(try await store.blockedSearchCount(query: "alpha", limit: 10, requestingAgent: "codex") == 1)
+        #expect(try await store.blockedSearchCount(query: "alpha", limit: 10, requestingAgent: "cursor") == 0)
+    }
+
+    @Test func setExclusionTogglesSingleAgent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let m = try await store.add(content: "toggle me", type: .note, actorKind: .cli, actorID: "user")
+
+        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: true, actorKind: .cli, actorID: "user"))
+        #expect(try await store.get(id: m.id, requestingAgent: "cursor") == nil)
+
+        // Idempotent re-add reports no change.
+        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: true, actorKind: .cli, actorID: "user") == false)
+
+        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: false, actorKind: .cli, actorID: "user"))
+        #expect(try await store.get(id: m.id, requestingAgent: "cursor")?.id == m.id)
+    }
+
+    @Test func grantAllAccessClearsAgentEverywhere() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "a", type: .note, excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "b", type: .note, excludedAgents: ["codex", "cursor"], actorKind: .cli, actorID: "user")
+
+        let cleared = try await store.grantAllAccess(toAgent: "codex", actorKind: .cli, actorID: "user")
+        #expect(cleared == 2)
+        #expect(try await store.memoriesExcluding(agent: "codex").isEmpty)
+        // Other agents' exclusions untouched.
+        #expect(try await store.memoriesExcluding(agent: "cursor").count == 1)
+    }
+
+    @Test func accessMethodsIgnoreBlankAgent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let m = try await store.add(content: "x", type: .note, actorKind: .cli, actorID: "user")
+        // Empty / whitespace agent ids are no-ops, never partial writes.
+        #expect(try await store.memoriesExcluding(agent: "   ").isEmpty)
+        #expect(try await store.setExclusion(memoryID: m.id, agent: "", excluded: true, actorKind: .cli, actorID: "user") == false)
+        #expect(try await store.grantAllAccess(toAgent: "  ", actorKind: .cli, actorID: "user") == 0)
+        #expect(try await store.revokeAllAccess(fromAgent: "", actorKind: .cli, actorID: "user") == 0)
+        // The memory is still visible to everyone — nothing was excluded.
+        #expect(try await store.get(id: m.id, requestingAgent: "codex")?.id == m.id)
+    }
+
+    @Test func revokeAllAccessExcludesAgentFromEveryMemory() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "a", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "b", type: .note, excludedAgents: ["cursor"], actorKind: .cli, actorID: "user")
+
+        let added = try await store.revokeAllAccess(fromAgent: "cursor", actorKind: .cli, actorID: "user")
+        #expect(added == 1) // only the memory that didn't already exclude cursor
+        #expect(try await store.memoriesExcluding(agent: "cursor").count == 2)
+        #expect(try await store.recent(limit: 10, requestingAgent: "cursor").isEmpty)
+    }
 }

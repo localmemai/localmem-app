@@ -4,3 +4,7 @@
 .DS_Store
 xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata
+
+# Coverage artifacts
+*.profraw
+*.profdata

@@ -340,6 +340,7 @@ struct ToolRegistry: Sendable {
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let actorID = await identity.name
         let memories = try await store.search(query: query, limit: limit, requestingAgent: actorID)
+        let blockedCount = try await store.blockedSearchCount(query: query, limit: limit, requestingAgent: actorID)
         do {
             try await activityStore.add(Activity(
                 actorKind: .mcp,
@@ -348,6 +349,15 @@ struct ToolRegistry: Sendable {
                 query: query,
                 resultCount: memories.count
             ))
+            if blockedCount > 0 {
+                try await activityStore.add(Activity(
+                    actorKind: .mcp,
+                    actorID: actorID,
+                    operation: "access_filtered",
+                    query: query,
+                    resultCount: blockedCount
+                ))
+            }
         } catch {
             Log.error(.mcp, "Failed to write activity row", [
                 "operation": "memory_search",
@@ -361,6 +371,7 @@ struct ToolRegistry: Sendable {
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let actorID = await identity.name
         let memories = try await store.recent(limit: limit, requestingAgent: actorID)
+        let blockedCount = try await store.blockedRecentCount(limit: limit, requestingAgent: actorID)
         do {
             try await activityStore.add(Activity(
                 actorKind: .mcp,
@@ -368,6 +379,14 @@ struct ToolRegistry: Sendable {
                 operation: "memory_recent",
                 resultCount: memories.count
             ))
+            if blockedCount > 0 {
+                try await activityStore.add(Activity(
+                    actorKind: .mcp,
+                    actorID: actorID,
+                    operation: "access_filtered",
+                    resultCount: blockedCount
+                ))
+            }
         } catch {
             Log.error(.mcp, "Failed to write activity row", [
                 "operation": "memory_recent",
@@ -389,6 +408,9 @@ struct ToolRegistry: Sendable {
         }
         let actorID = await identity.name
         guard let existing = try await store.get(id: id, requestingAgent: actorID) else {
+            if try await store.get(id: id, requestingAgent: nil) != nil {
+                await recordBlockedAccess(actorID: actorID, memoryID: id, operation: "memory_update")
+            }
             throw MCPError.invalidParams("No memory with id \(idString).")
         }
 
@@ -441,6 +463,24 @@ struct ToolRegistry: Sendable {
             actorID: actorID
         )
         return .init(content: [.plainText("{\"id\":\"\(updated.id.uuidString)\"}")])
+    }
+
+    private func recordBlockedAccess(actorID: String, memoryID: UUID, operation: String) async {
+        do {
+            try await activityStore.add(Activity(
+                actorKind: .mcp,
+                actorID: actorID,
+                operation: "access_blocked",
+                memoryID: memoryID,
+                query: operation,
+                resultCount: 1
+            ))
+        } catch {
+            Log.error(.mcp, "Failed to write blocked access activity row", [
+                "operation": operation,
+                "error": String(describing: error),
+            ])
+        }
     }
 }
 

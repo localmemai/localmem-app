@@ -366,6 +366,12 @@ struct ToolRegistryTests {
         let recent = try await registry.call(name: "memory_recent", arguments: nil).content.firstText
         #expect(recent.contains("visible searchable"))
         #expect(!recent.contains("hidden searchable"))
+
+        let rows = try await activityStore.recent(limit: 10)
+        let filtered = rows.filter { $0.operation == "access_filtered" }
+        #expect(filtered.count == 2)
+        #expect(filtered.allSatisfy { $0.actorID == "test-client" })
+        #expect(filtered.allSatisfy { $0.resultCount == 1 })
     }
 
     @Test("MCP update cannot edit a memory excluded for the client")
@@ -398,6 +404,11 @@ struct ToolRegistryTests {
         }
         let admin = try await store.get(id: memory.id)
         #expect(admin?.content == "do not edit")
+
+        let rows = try await activityStore.recent(limit: 10)
+        let blocked = rows.first { $0.operation == "access_blocked" }
+        #expect(blocked?.actorID == "test-client")
+        #expect(blocked?.memoryID == memory.id)
     }
 
     @Test("MCP JSON omits excludedAgents metadata")

@@ -19,6 +19,18 @@ struct MCPClientIdentityTests {
         #expect(name == "claude-code")
     }
 
+    @Test("normalizes known client names to catalog ids")
+    func normalizesKnownClientNames() async {
+        let identity = MCPClientIdentity(fallback: "codex-mcp-client")
+        #expect(await identity.name == "codex")
+
+        await identity.set("Claude Code")
+        #expect(await identity.name == "claude-code")
+
+        await identity.set("antigravity")
+        #expect(await identity.name == "antigravity-client")
+    }
+
     @Test("set is a no-op for nil and empty strings — fallback remains in effect")
     func setIgnoresNilAndEmpty() async {
         let identity = MCPClientIdentity(fallback: "fallback")

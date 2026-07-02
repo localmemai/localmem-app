@@ -127,6 +127,30 @@ struct InstructionsInstallerTests {
         #expect(after.contains("<!-- localmem -->"))
     }
 
+    @Test("Remove import line preserves surrounding user instructions")
+    func removeImportLinePreservesUserContent() throws {
+        let (installer, tmp) = try makeFixture(existingAgentDirs: [".claude"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let target = AgentInstructionTarget(displayName: "Claude Code", relativePath: ".claude/CLAUDE.md")
+        let before = """
+        # My existing instructions
+
+        \(installer.importLine)
+        Prefer Tailwind.
+
+        """
+        try before.write(to: tmp.appendingPathComponent(target.relativePath), atomically: true, encoding: .utf8)
+
+        let outcome = try installer.removeImportLine(from: target)
+        if case .removed = outcome {} else { Issue.record("expected .removed, got \(outcome)") }
+
+        let after = try String(contentsOf: tmp.appendingPathComponent(target.relativePath), encoding: .utf8)
+        #expect(!after.contains("<!-- localmem -->"))
+        #expect(after.contains("# My existing instructions"))
+        #expect(after.contains("Prefer Tailwind."))
+    }
+
     // MARK: - Skip when agent not installed (§6.2)
 
     @Test("Skips target when the agent's directory does not exist")

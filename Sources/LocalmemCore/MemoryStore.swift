@@ -251,6 +251,26 @@ public actor MemoryStore {
         }
     }
 
+    public func blockedRecentCount(limit: Int = 20, requestingAgent: String) async throws -> Int {
+        let trimmed = requestingAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return try await database.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM (
+                        SELECT id FROM memories
+                        ORDER BY created_at DESC, rowid DESC
+                        LIMIT ?
+                    ) candidates
+                    JOIN memory_agent_exclusions e ON e.memory_id = candidates.id
+                    WHERE e.agent_id = ?
+                    """,
+                arguments: [limit, trimmed]
+            ) ?? 0
+        }
+    }
+
     public func search(query: String, limit: Int = 20) async throws -> [Memory] {
         try await search(query: query, limit: limit, requestingAgent: nil)
     }
@@ -297,6 +317,132 @@ public actor MemoryStore {
             let memories = try Self.attachMetadata(rows: rows, in: db)
             let byID = Dictionary(uniqueKeysWithValues: memories.map { ($0.id.uuidString, $0) })
             return orderedIDs.compactMap { byID[$0] }
+        }
+    }
+
+    public func blockedSearchCount(query: String, limit: Int = 20, requestingAgent: String) async throws -> Int {
+        let trimmed = requestingAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fts = Self.sanitizeFTSQuery(query)
+        guard !trimmed.isEmpty, !fts.isEmpty else { return 0 }
+        return try await database.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM (
+                        SELECT memory_id FROM memories_fts
+                        WHERE memories_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?
+                    ) candidates
+                    JOIN memory_agent_exclusions e ON e.memory_id = candidates.memory_id
+                    WHERE e.agent_id = ?
+                    """,
+                arguments: [fts, limit, trimmed]
+            ) ?? 0
+        }
+    }
+
+    // MARK: - Access management (agent-centric)
+
+    /// Memories that currently exclude `agent`, newest first. Admin view — not
+    /// subject to the read filter (callers are the CLI/app, never an MCP agent).
+    public func memoriesExcluding(agent: String) async throws -> [Memory] {
+        let trimmed = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        return try await database.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT memories.* FROM memories
+                    JOIN memory_agent_exclusions e ON e.memory_id = memories.id
+                    WHERE e.agent_id = ?
+                    ORDER BY memories.created_at DESC, memories.rowid DESC
+                    """,
+                arguments: [trimmed]
+            )
+            return try Self.attachMetadata(rows: rows, in: db)
+        }
+    }
+
+    /// Adds or removes a single memory's exclusion for `agent`. Returns true if
+    /// a row actually changed (idempotent otherwise).
+    @discardableResult
+    public func setExclusion(
+        memoryID: UUID,
+        agent: String,
+        excluded: Bool,
+        actorKind: ActorKind,
+        actorID: String? = nil
+    ) async throws -> Bool {
+        let trimmed = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return try await database.write { db in
+            if excluded {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO memory_agent_exclusions (memory_id, agent_id) VALUES (?, ?)",
+                    arguments: [memoryID.uuidString, trimmed]
+                )
+            } else {
+                try db.execute(
+                    sql: "DELETE FROM memory_agent_exclusions WHERE memory_id = ? AND agent_id = ?",
+                    arguments: [memoryID.uuidString, trimmed]
+                )
+            }
+            let changed = db.changesCount > 0
+            if changed {
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind,
+                    actorID: actorID,
+                    operation: excluded ? "access_revoke" : "access_grant",
+                    memoryID: memoryID
+                ), in: db)
+            }
+            return changed
+        }
+    }
+
+    /// Removes `agent` from every memory's denylist (full access). Returns the
+    /// number of exclusions cleared.
+    @discardableResult
+    public func grantAllAccess(toAgent agent: String, actorKind: ActorKind, actorID: String? = nil) async throws -> Int {
+        let trimmed = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return try await database.write { db in
+            try db.execute(
+                sql: "DELETE FROM memory_agent_exclusions WHERE agent_id = ?",
+                arguments: [trimmed]
+            )
+            let n = db.changesCount
+            if n > 0 {
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind, actorID: actorID, operation: "access_grant_all"
+                ), in: db)
+            }
+            return n
+        }
+    }
+
+    /// Excludes `agent` from every memory (hide everything). Returns the number
+    /// of new exclusions added.
+    @discardableResult
+    public func revokeAllAccess(fromAgent agent: String, actorKind: ActorKind, actorID: String? = nil) async throws -> Int {
+        let trimmed = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return try await database.write { db in
+            try db.execute(
+                sql: """
+                    INSERT OR IGNORE INTO memory_agent_exclusions (memory_id, agent_id)
+                    SELECT id, ? FROM memories
+                    """,
+                arguments: [trimmed]
+            )
+            let n = db.changesCount
+            if n > 0 {
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind, actorID: actorID, operation: "access_revoke_all"
+                ), in: db)
+            }
+            return n
         }
     }
 
