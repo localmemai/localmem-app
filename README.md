@@ -10,7 +10,14 @@ all on your machine. Open source, macOS-native.
 
 [localmem.ai][site]
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/localmem-ai/localmem-app/actions/workflows/ci.yml/badge.svg)](https://github.com/localmem-ai/localmem-app/actions/workflows/ci.yml)
+[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#getting-started)
+
 </div>
+
+> **Status:** early and under active development. macOS-only, pre-1.0, and not
+> yet signed/notarized — for now, build from source (below).
 
 ---
 

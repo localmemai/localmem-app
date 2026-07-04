@@ -12,10 +12,11 @@ concurrency:
 jobs:
   build-test:
     name: Build & test
-    # Localmem targets macOS 26 (Package.swift) with the Swift 6.2 toolchain,
-    # so it needs a runner image that ships that SDK. Switch to a pinned image
-    # (e.g. macos-15) if the macOS 26 runner is unavailable in your org.
-    runs-on: macos-26
+    # Localmem targets macOS 26 with the Swift 6.2 toolchain (see Package.swift),
+    # so the runner image must ship that SDK. `macos-latest` tracks the newest
+    # GitHub-hosted image; pin to a specific image (e.g. `macos-26`) once it is
+    # available and stable in your org.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
