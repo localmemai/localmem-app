@@ -753,20 +753,7 @@ struct ComingSoonSidebarGroup: View {
 struct BrandHeader: View {
     var body: some View {
         HStack(spacing: 11) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(
-                        LinearGradient(
-                            colors: [.blue, .green],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 38, height: 38)
-                Text("L")
-                    .font(.system(size: 20, weight: .heavy))
-                    .foregroundStyle(.white)
-            }
+            LocalmemMark(size: 38)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Localmem").font(.headline)
                 Text("Private AI Memory Vault")
@@ -777,6 +764,64 @@ struct BrandHeader: View {
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 8)
+    }
+}
+
+/// The Localmem brand mark: a dark rounded tile with a bracket-`m` glyph in the
+/// house gradient. Matches `logo.svg` on the marketing site (a 160-unit
+/// artboard scaled to `size`).
+struct LocalmemMark: View {
+    var size: CGFloat
+
+    /// House gradient: #4d8dff → #35d0e0 (55%) → #a07dff, top-left to bottom-right.
+    static let gradient = LinearGradient(
+        stops: [
+            .init(color: Color(red: 0.302, green: 0.553, blue: 1.0), location: 0),
+            .init(color: Color(red: 0.208, green: 0.816, blue: 0.878), location: 0.55),
+            .init(color: Color(red: 0.627, green: 0.490, blue: 1.0), location: 1),
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    var body: some View {
+        let radius = size * (37.0 / 160.0)
+        ZStack {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color(red: 0.047, green: 0.055, blue: 0.083)) // #0c0e15
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                )
+            BracketsShape()
+                .stroke(
+                    Self.gradient,
+                    style: StrokeStyle(lineWidth: size * (9.0 / 160.0), lineCap: .round, lineJoin: .round)
+                )
+            Text("m")
+                .font(.system(size: size * (52.0 / 160.0), weight: .heavy))
+                .foregroundStyle(Self.gradient)
+                .offset(y: size * (5.0 / 160.0))
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+/// Two square brackets `[ ]` drawn on the 160-unit brand artboard.
+private struct BracketsShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x / 160 * rect.width,
+                    y: rect.minY + y / 160 * rect.height)
+        }
+        var path = Path()
+        // Left bracket:  M62 50 H48 V110 H62
+        path.move(to: p(62, 50)); path.addLine(to: p(48, 50))
+        path.addLine(to: p(48, 110)); path.addLine(to: p(62, 110))
+        // Right bracket: M98 50 H112 V110 H98
+        path.move(to: p(98, 50)); path.addLine(to: p(112, 50))
+        path.addLine(to: p(112, 110)); path.addLine(to: p(98, 110))
+        return path
     }
 }
 
