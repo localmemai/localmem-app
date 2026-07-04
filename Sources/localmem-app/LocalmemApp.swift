@@ -1025,11 +1025,15 @@ struct OverviewView: View {
                     title: "Overview",
                     subtitle: "Recent memories and agent activity."
                 ) {
+                    // Dev-only affordance to replay the first-run wizard; not
+                    // shipped in release builds.
+                    #if DEBUG
                     Button {
                         onTestWizard()
                     } label: {
                         Label("Test Setup Wizard", systemImage: "wand.and.stars")
                     }
+                    #endif
                 }
 
                 StatsStrip(statusVM: statusVM)
