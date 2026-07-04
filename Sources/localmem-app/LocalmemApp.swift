@@ -17,6 +17,13 @@ struct LocalmemApp: App {
         if let icon = LocalmemMark.dockIcon() {
             NSApplication.shared.applicationIconImage = icon
         }
+        // Screenshot/testing hook: pin the window appearance regardless of the
+        // system setting. `LOCALMEM_APPEARANCE=light|dark`.
+        switch ProcessInfo.processInfo.environment["LOCALMEM_APPEARANCE"] {
+        case "light": NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
     }
 
     var body: some Scene {
