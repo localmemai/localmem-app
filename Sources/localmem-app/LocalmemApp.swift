@@ -474,7 +474,15 @@ enum SheetKind: Identifiable {
 }
 
 struct ContentView: View {
-    @State private var section: AppSection = .overview
+    // Screenshot/testing hook: `LOCALMEM_INITIAL_SECTION` (an AppSection raw
+    // value) selects the section the window opens on. No effect when unset.
+    @State private var section: AppSection = {
+        if let raw = ProcessInfo.processInfo.environment["LOCALMEM_INITIAL_SECTION"],
+           let seeded = AppSection(rawValue: raw) {
+            return seeded
+        }
+        return .overview
+    }()
     @State private var selectedComingSoon: ComingSoonFeature?
     @State private var query = ""
     @State private var sheet: SheetKind?
@@ -581,7 +589,16 @@ struct ContentView: View {
         }
         .background { sectionShortcuts }
         .onAppear {
-            if !seenWizard {
+            // Screenshot/testing hooks: `LOCALMEM_SHOW_WIZARD=1` forces the
+            // setup wizard open; `LOCALMEM_INITIAL_SECTION` (screenshot mode)
+            // suppresses the first-run wizard so a specific section is visible.
+            let env = ProcessInfo.processInfo.environment
+            if env["LOCALMEM_SHOW_WIZARD"] == "1" {
+                wizardMode = .firstRun
+                showSetupWizard = true
+            } else if env["LOCALMEM_INITIAL_SECTION"] != nil {
+                // stay on the requested section; skip the auto wizard
+            } else if !seenWizard {
                 wizardMode = .firstRun
                 showSetupWizard = true
             }
@@ -1278,6 +1295,23 @@ struct MemoriesView: View {
                 onShowAuditTrail: onShowAuditTrail
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // Screenshot/testing hook: `LOCALMEM_SELECT_MEMORY` (a title substring,
+        // or "first") pre-selects a memory once the list has loaded.
+        .task {
+            guard selection == nil,
+                  let want = ProcessInfo.processInfo.environment["LOCALMEM_SELECT_MEMORY"]
+            else { return }
+            for _ in 0..<40 {
+                if let vm, !vm.memories.isEmpty {
+                    let match = want == "first"
+                        ? vm.memories.first
+                        : vm.memories.first { ($0.title ?? "").localizedCaseInsensitiveContains(want) }
+                    selection = (match ?? vm.memories.first)?.id
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
         }
     }
 }

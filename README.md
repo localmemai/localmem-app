@@ -115,7 +115,8 @@ per-agent permissions, and audit logging; the app, CLI, and MCP server are thin
 surfaces over it. Storage is SQLite via [GRDB][grdb] with an FTS5 index for
 search. The MCP server is built on the official [Swift MCP SDK][swift-sdk].
 
-Design documents live in [`docs/`](docs/).
+The full architecture, data model, security model, access control, app UI, and
+distribution plan live in the [technical design](docs/Technical_Design.md).
 
 ## Contributing
 
