@@ -57,12 +57,12 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 # ---- 1. build universal release binaries -----------------------------------
 log "Building universal (arm64 + x86_64) release binaries…"
-swift build -c release "${ARCHS[@]}" --package-path "$REPO_ROOT" >/dev/null
-BIN_PATH="$(swift build -c release "${ARCHS[@]}" --package-path "$REPO_ROOT" --show-bin-path)"
+swift build -c release "${ARCH_FLAGS[@]}" --package-path "$REPO_ROOT" >/dev/null
+BIN_PATH="$(swift build -c release "${ARCH_FLAGS[@]}" --package-path "$REPO_ROOT" --show-bin-path)"
 log "Built products in $BIN_PATH"
 
 # ---- 2. assemble the .app bundle -------------------------------------------
-log "Assembling $APP…"
+log "Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 
@@ -110,7 +110,7 @@ else
 fi
 
 # ---- 4. build the DMG ------------------------------------------------------
-log "Building $DMG…"
+log "Building ${DMG}…"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/Localmem.app"
 ln -s /Applications "$STAGE/Applications"

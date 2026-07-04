@@ -8,3 +8,6 @@ xcuserdata/
 # Coverage artifacts
 *.profraw
 *.profdata
+
+# Packaging output
+dist/

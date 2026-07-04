@@ -458,31 +458,57 @@ macOS-only — no Windows/Linux installer is in scope.
 
 1. **The MCP server needs a stable, absolute path.** Setup writes the absolute
    path of `localmem-mcp` into each client's config; if it moves, clients silently
-   break. The three binaries must stay co-located.
+   break. The three binaries must stay co-located, and the registered path must
+   survive updates. `BinaryLocator` handles the two co-location shapes this
+   creates: when both binaries sit in the same dir (dev build, or a Homebrew
+   prefix where `localmem` *and* `localmem-mcp` are both symlinked) it registers
+   the unresolved sibling — the stable, non-versioned path; when only `localmem`
+   is symlinked (the app-installed CLI) it follows the symlink into the bundle to
+   find `localmem-mcp`. Both paths are update-stable.
 2. **Everything must be code-signed and notarized.** Any binary outside the Mac
    App Store is Gatekeeper-checked; without a Developer ID signature +
    notarization users see "Localmem is damaged." Cost: Apple Developer Program
    ($99/yr) + a notarization step in CI.
 3. **The Mac App Store is ruled out.** Localmem edits *other apps'* config files
    and shells out to their CLIs — the sandbox forbids this.
-4. **The GUI is not a `.app` bundle yet.** `localmem-app` is a plain SwiftPM
-   executable; it must be wrapped into a signed `.app` (Xcode wrapper or a
-   bundling script) before any GUI distribution.
+4. **The GUI ships as a signed `.app` bundle.** `localmem-app` is a plain SwiftPM
+   executable, so [`packaging/build-dmg.sh`](../packaging/build-dmg.sh) wraps it
+   into `Localmem.app` (using [`packaging/Info.plist`](../packaging/Info.plist)),
+   co-locating all three binaries plus the SwiftPM resource bundles in
+   `Contents/MacOS/`, then signs, notarizes, and produces the DMG.
 
-### Recommended shape
+### v1 shape (implemented)
+
+v1 ships a single channel — the **notarized DMG** — and defers the CLI channels:
+
+- **App:** notarized **DMG** (drag to `/Applications`), built by
+  [`packaging/build-dmg.sh`](../packaging/build-dmg.sh). The app bundles the CLI
+  and, from the setup wizard, offers to symlink `localmem` into `/usr/local/bin`
+  (`CLIToolInstaller`, the VS Code / Ollama pattern; falls back to an
+  administrator prompt via osascript when `/usr/local/bin` isn't user-writable).
+- **Updates:** **re-download** — the user drags a new DMG over the old app.
+  Because the app stays at `/Applications/Localmem.app`, the `localmem-mcp` path
+  baked into client configs is unchanged, so registrations survive.
+- **Deferred:** Homebrew formula + curl script (CLI-only channels), a Homebrew
+  Cask, a ZIP artifact, and Sparkle auto-updates — see the target shape below.
+
+**Update safety.** User data is never inside the bundle: memories live in
+`~/Library/Application Support/Localmem/`, instruction files in `~/.localmem/`,
+and client configs in each client's own file. An install or update only ever
+replaces the binaries under `Localmem.app`, so memories and configs are preserved
+by construction.
+
+### Target shape (later releases)
 
 Ship both families of channels — they're different artifacts for different
 audiences:
 
 - **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both install
   `localmem` + `localmem-mcp`.
-- **App:** notarized **DMG** as the website download button (**+** a ZIP for
-  Sparkle), **and** a Homebrew **Cask**. The app bundles the CLI and, on first
-  run, offers to symlink `localmem` into `/usr/local/bin` (the VS Code / Ollama
-  pattern).
+- **App:** the DMG **+** a ZIP for Sparkle, **and** a Homebrew **Cask**.
 - **Updates:** **Sparkle** for the app (appcast XML hosted at
-  `localmem.ai/appcast.xml`, EdDSA-signed releases); `brew upgrade` / re-run curl
-  for the CLI.
+  `localmem.ai/appcast.xml`, EdDSA-signed releases; in-place swap keeps the
+  `/Applications` path stable); `brew upgrade` / re-run curl for the CLI.
 - **Skip the PKG** unless the website installer specifically needs to configure
   the CLI without the app touching `/usr/local/bin`.
 
@@ -492,17 +518,20 @@ registration.
 
 ### Website & release pipeline
 
-The site serves the download button (DMG), the install command, `install.sh`, the
-Sparkle appcast, the release artifacts, and docs. This implies a CI release
+The marketing site lives in its own repo,
+[`localmem-ai/localmem-web`](https://github.com/localmem-ai/localmem-web) (a
+single static `index.html`, deployed on Vercel) — it is no longer vendored in
+this repo. The site serves the download button (DMG), the install command,
+`install.sh`, the Sparkle appcast, the release artifacts, and docs. This implies a CI release
 pipeline: build the three binaries (universal arm64 + x86_64) → assemble the
 signed `.app` → sign + notarize → produce DMG + ZIP → upload artifacts → update
 the appcast + Homebrew formula/cask.
 
 ### Prerequisites & costs
 
-Apple Developer Program ($99/yr); notarization in CI; `.app` bundling; universal
-binaries; an EdDSA key for Sparkle; a Homebrew tap (unless going into
-homebrew-core).
+Apple Developer Program ($99/yr); notarization in CI (`.app` bundling is scripted
+in [`packaging/build-dmg.sh`](../packaging/build-dmg.sh)); universal binaries; an
+EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 
 ## 12. Roadmap
 

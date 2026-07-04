@@ -680,6 +680,7 @@ private struct WizardRunScreen: View {
                     if model.disconnectedCount > 0 { summaryChip("\(model.disconnectedCount) disconnected", .orange) }
                     if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
                 }
+                CLIToolCard()
             }
             Spacer(minLength: 0)
         }
@@ -691,6 +692,80 @@ private struct WizardRunScreen: View {
         Text(text)
             .font(.callout.weight(.semibold))
             .foregroundStyle(color)
+    }
+}
+
+/// Optional card offering to put the bundled `localmem` CLI on the user's PATH.
+/// Only shown when the app carries a bundled CLI (i.e. a packaged .app).
+private struct CLIToolCard: View {
+    @State private var status = CLIToolInstaller.status()
+    @State private var busy = false
+    @State private var errorText: String?
+
+    var body: some View {
+        if status != .unavailable {
+            HStack(spacing: 12) {
+                Image(systemName: "terminal")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Command-line tool").fontWeight(.medium)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(errorText != nil ? .red : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                trailing
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var subtitle: String {
+        if let errorText { return errorText }
+        switch status {
+        case .installed:          return "`localmem` is on your PATH."
+        case .conflict(let path): return "Another `localmem` is on your PATH (\(path))."
+        case .notInstalled:       return "Add `localmem` to your PATH to use it from any terminal."
+        case .unavailable:        return ""
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if busy {
+            ProgressView().controlSize(.small)
+        } else {
+            switch status {
+            case .installed:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .conflict:
+                Button("Replace") { install() }
+            case .notInstalled:
+                Button("Install") { install() }
+            case .unavailable:
+                EmptyView()
+            }
+        }
+    }
+
+    private func install() {
+        busy = true
+        errorText = nil
+        Task {
+            do {
+                try await Task.detached { try CLIToolInstaller.install() }.value
+            } catch let error as CLIToolInstallError {
+                if case .cancelled = error {} else { errorText = error.errorDescription }
+            } catch {
+                errorText = error.localizedDescription
+            }
+            status = CLIToolInstaller.status()
+            busy = false
+        }
     }
 }
 

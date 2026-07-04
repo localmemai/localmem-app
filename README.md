@@ -87,8 +87,9 @@ Once setup finishes, restart your AI clients and they'll have Localmem
 available. Try telling one "remember that I prefer flat whites" — then ask a
 fresh session in another project what you like to drink.
 
-Packaged downloads (signed DMG and a Homebrew formula) are on the way — see
-[localmem.ai][site].
+A packaged download is on the way: a signed DMG that bundles the app and both
+command-line tools, with a one-click option to add `localmem` to your PATH
+(Homebrew and a curl installer follow later). See [localmem.ai][site].
 
 ## CLI
 

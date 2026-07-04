@@ -32,6 +32,25 @@ Please run `swift test` before opening a pull request and make sure the suite
 passes. If you add or change behavior, add tests alongside it — coverage lives
 in [`Tests/`](Tests/).
 
+### Packaging the app
+
+[`packaging/build-dmg.sh`](packaging/build-dmg.sh) assembles the signed
+`Localmem.app` (all three binaries co-located) and produces a DMG. For a quick
+unsigned local build:
+
+```sh
+# Fast, arm64-only, unsigned — for testing the bundle layout, not distributable
+ARCHS="arm64" VERSION=0.0.0-dev packaging/build-dmg.sh
+
+# Release build: universal, signed, and notarized
+VERSION=0.1.0 \
+  SIGN_IDENTITY="Developer ID Application: … (TEAMID)" \
+  NOTARY_PROFILE=localmem-notary \
+  packaging/build-dmg.sh
+```
+
+Output lands in `dist/` (git-ignored).
+
 ## Project layout
 
 Everything sits on top of one shared core so the app, CLI, and MCP server never
