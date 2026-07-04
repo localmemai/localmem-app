@@ -1,34 +1,21 @@
 import SwiftUI
 import LocalmemCore
 
-// MARK: - Static setup-wizard preview
+// MARK: - Setup wizard
 //
-// This is a UI-only mock of the setup wizard flow. It runs entirely on
-// canned data so the screens and transitions can be reviewed and tuned
-// before the real setup engine is wired in. The "Preview controls" strip at
-// the bottom flips between every case the real wizard will have to render:
-// first-run vs reconfigure, which agents are installed, and whether a
-// registration fails. None of this touches disk or the MCP clients.
+// Drives the real setup flow: detects which agents are installed, lets the
+// user choose which to connect, then runs `localmem setup` (via
+// AgentConfigurationInspector) and prunes any agent the user left unchecked.
+//
+// Interim mechanism: `localmem setup` connects *every* installed agent
+// all-or-nothing, so selective control is done by running setup and then
+// disconnecting the unchecked agents. This will be replaced by per-agent
+// in-process registrars once the setup engine is extracted into a shared
+// library (see docs/Setup_Wizard_Plan discussion).
 
-enum SetupWizardMode: String, CaseIterable, Identifiable {
-    case firstRun = "First run"
-    case reconfigure = "Reconfigure"
-    var id: String { rawValue }
-}
-
-/// Which agents are present on the (imaginary) machine.
-enum ReviewScenario: String, CaseIterable, Identifiable {
-    case mixed = "Mixed"
-    case allInstalled = "All installed"
-    case noneInstalled = "None installed"
-    var id: String { rawValue }
-}
-
-/// Whether the run pass hits a failure row.
-enum RunScenario: String, CaseIterable, Identifiable {
-    case allSucceed = "All succeed"
-    case oneFails = "One fails"
-    var id: String { rawValue }
+enum SetupWizardMode {
+    case firstRun
+    case reconfigure
 }
 
 enum SetupWizardStep: Int, CaseIterable, Identifiable {
@@ -62,8 +49,9 @@ struct WizardAgent: Identifiable {
     let symbol: String
     var isInstalled: Bool
     var selected: Bool
-    /// Was this agent already connected before this wizard run? Drives the
-    /// reconfigure diff (unchecking a connected agent → disconnect).
+    /// Was this agent already connected before the wizard ran? Drives the
+    /// reconfigure diff (unchecking a connected agent → disconnect) and the
+    /// connected/already-connected labelling.
     var wasConnected: Bool
 }
 
@@ -71,6 +59,7 @@ enum WizardRunOutcome {
     case connected
     case alreadyConnected
     case disconnected
+    case skipped
     case failed(String)
     case instructionsInstalled
     case importAdded
@@ -80,6 +69,7 @@ enum WizardRunOutcome {
         case .connected, .instructionsInstalled, .importAdded: return "checkmark.circle.fill"
         case .alreadyConnected: return "arrow.triangle.2.circlepath"
         case .disconnected:     return "minus.circle.fill"
+        case .skipped:          return "minus.circle"
         case .failed:           return "xmark.octagon.fill"
         }
     }
@@ -89,6 +79,7 @@ enum WizardRunOutcome {
         case .connected, .instructionsInstalled, .importAdded: return .green
         case .alreadyConnected: return .secondary
         case .disconnected:     return .orange
+        case .skipped:          return .secondary
         case .failed:           return .red
         }
     }
@@ -98,6 +89,7 @@ enum WizardRunOutcome {
         case .connected:             return "Connected"
         case .alreadyConnected:      return "Already connected"
         case .disconnected:          return "Disconnected"
+        case .skipped:               return "Not connected"
         case .instructionsInstalled: return "Instructions installed"
         case .importAdded:           return "Import line added"
         case .failed(let why):       return "Failed — \(why)"
@@ -107,26 +99,22 @@ enum WizardRunOutcome {
 
 struct WizardRunRow: Identifiable {
     enum Kind { case agent, instruction }
-    enum State { case pending, running, done }
+    enum State { case pending, running, done(WizardRunOutcome) }
 
     let id: String
     let name: String
     let symbol: String
     let colorID: String?
     let kind: Kind
-    let outcome: WizardRunOutcome
     var state: State = .pending
 }
 
 @MainActor
 @Observable
-final class WizardMockModel {
-    var mode: SetupWizardMode = .firstRun
-    var reviewScenario: ReviewScenario = .mixed
-    var runScenario: RunScenario = .allSucceed
-
+final class SetupWizardModel {
     enum TouchIDState { case idle, authenticating, enabled, failed }
 
+    let mode: SetupWizardMode
     var stepIndex = 0
     var touchIDState: TouchIDState = .idle
     var agents: [WizardAgent] = []
@@ -134,7 +122,10 @@ final class WizardMockModel {
     var isRunning = false
     var runComplete = false
 
-    init() { rebuildAgents() }
+    init(mode: SetupWizardMode) {
+        self.mode = mode
+        detect()
+    }
 
     var steps: [SetupWizardStep] {
         mode == .firstRun
@@ -149,11 +140,53 @@ final class WizardMockModel {
     var canGoBack: Bool { stepIndex > 0 && !isRunning && touchIDState != .authenticating }
     var touchIDEnabled: Bool { touchIDState == .enabled }
 
+    // MARK: Detection
+
+    /// Rebuild the agent list from the current on-disk state. Selection defaults
+    /// to every installed agent on first run, and to the currently-connected set
+    /// when reconfiguring.
+    func detect() {
+        agents = KnownAgents.all.map { known in
+            let snapshot = AgentSnapshot(
+                id: known.id, displayName: known.displayName, symbol: known.symbol,
+                isConnected: false, lastAccess: nil, reads: 0, writes: 0
+            )
+            let state = AgentConfigurationInspector.state(for: snapshot)
+            let connected = state.isRegistered
+            return WizardAgent(
+                id: known.id,
+                displayName: known.displayName,
+                symbol: known.symbol,
+                isInstalled: state.isInstalled,
+                selected: mode == .reconfigure ? connected : state.isInstalled,
+                wasConnected: connected && state.isInstalled
+            )
+        }
+    }
+
+    private func isRegistered(_ agentID: String) -> Bool {
+        guard let known = KnownAgents.all.first(where: { $0.id == agentID }) else { return false }
+        let snapshot = AgentSnapshot(
+            id: known.id, displayName: known.displayName, symbol: known.symbol,
+            isConnected: false, lastAccess: nil, reads: 0, writes: 0
+        )
+        return AgentConfigurationInspector.state(for: snapshot).isRegistered
+    }
+
+    private func hasImport(_ agentID: String) -> Bool {
+        guard let known = KnownAgents.all.first(where: { $0.id == agentID }) else { return false }
+        let snapshot = AgentSnapshot(
+            id: known.id, displayName: known.displayName, symbol: known.symbol,
+            isConnected: false, lastAccess: nil, reads: 0, writes: 0
+        )
+        return AgentConfigurationInspector.state(for: snapshot).hasInstructionImport == true
+    }
+
     // MARK: Touch ID
 
     /// Fire the real Touch ID prompt. Falls back to a simulated success when
     /// biometrics aren't available (unsigned dev build / no hardware) so the
-    /// preview flow stays walkable.
+    /// flow stays walkable.
     func enableTouchID() {
         guard touchIDState != .authenticating, touchIDState != .enabled else { return }
         touchIDState = .authenticating
@@ -178,16 +211,7 @@ final class WizardMockModel {
     func back() {
         guard stepIndex > 0 else { return }
         stepIndex -= 1
-        // Leaving the run step invalidates its results so re-entering re-runs.
         if currentStep != .run { resetRun() }
-    }
-
-    /// Full reset — used when a preview-control changes the scenario.
-    func reset() {
-        stepIndex = 0
-        touchIDState = .idle
-        resetRun()
-        rebuildAgents()
     }
 
     private func resetRun() {
@@ -196,102 +220,108 @@ final class WizardMockModel {
         runRows = []
     }
 
-    // MARK: Agent catalog
-
-    private func rebuildAgents() {
-        let installed: Set<String>
-        switch reviewScenario {
-        case .mixed:         installed = ["claude-code", "cursor", "codex", "antigravity-client"]
-        case .allInstalled:  installed = Set(KnownAgents.all.map(\.id))
-        case .noneInstalled: installed = []
-        }
-        // In reconfigure mode, pretend a couple of agents are already wired up.
-        let connected: Set<String> = mode == .reconfigure ? ["claude-code", "codex"] : []
-
-        agents = KnownAgents.all.map { a in
-            let isInstalled = installed.contains(a.id)
-            let wasConnected = connected.contains(a.id) && isInstalled
-            let selected = mode == .reconfigure ? wasConnected : isInstalled
-            return WizardAgent(
-                id: a.id,
-                displayName: a.displayName,
-                symbol: a.symbol,
-                isInstalled: isInstalled,
-                selected: selected,
-                wasConnected: wasConnected
-            )
-        }
-    }
-
-    // MARK: Run pass (simulated streaming)
+    // MARK: Run pass
 
     func startRun() {
         guard !isRunning, !runComplete else { return }
-        runRows = buildRunRows()
+        let connectAgents = agents.filter { $0.selected && $0.isInstalled }
+        let disconnectAgents = agents.filter { !$0.selected && $0.isInstalled }
+        runRows = buildRows(connect: connectAgents, disconnect: disconnectAgents)
         guard !runRows.isEmpty else { runComplete = true; return }
+
         isRunning = true
         Task { @MainActor in
-            for index in runRows.indices {
+            // Connect + instruction rows spin during the single setup call.
+            for index in runRows.indices where runRows[index].id.hasPrefix("reg-")
+                || runRows[index].kind == .instruction {
                 runRows[index].state = .running
-                try? await Task.sleep(for: .milliseconds(420))
-                runRows[index].state = .done
             }
+
+            var setupError: String?
+            if !connectAgents.isEmpty {
+                do { _ = try await AgentConfigurationInspector.repairAll() }
+                catch { setupError = error.localizedDescription }
+            }
+            await finalizeConnectRows(connectAgents, error: setupError)
+
+            // Prune the agents the user left unchecked (setup connects them all).
+            for agent in disconnectAgents {
+                update(rowID: "rm-\(agent.id)") { $0.state = .running }
+                var removeError: String?
+                do { try await AgentConfigurationInspector.removeConnection(agentID: agent.id) }
+                catch { removeError = error.localizedDescription }
+                try? await Task.sleep(for: .milliseconds(150))
+                let outcome: WizardRunOutcome = removeError.map { .failed($0) }
+                    ?? (agent.wasConnected ? .disconnected : .skipped)
+                update(rowID: "rm-\(agent.id)") { $0.state = .done(outcome) }
+            }
+
+            detect()
             isRunning = false
             runComplete = true
         }
     }
 
-    private func buildRunRows() -> [WizardRunRow] {
+    private func buildRows(connect: [WizardAgent], disconnect: [WizardAgent]) -> [WizardRunRow] {
         var rows: [WizardRunRow] = []
-        var failAssigned = false
-
-        for a in agents {
-            if a.selected, a.isInstalled, !a.wasConnected {
-                var outcome: WizardRunOutcome = .connected
-                if runScenario == .oneFails, !failAssigned {
-                    outcome = .failed("client CLI not found on PATH")
-                    failAssigned = true
-                }
-                rows.append(.init(id: "reg-\(a.id)", name: a.displayName, symbol: a.symbol,
-                                  colorID: a.id, kind: .agent, outcome: outcome))
-            } else if a.selected, a.isInstalled, a.wasConnected {
-                rows.append(.init(id: "reg-\(a.id)", name: a.displayName, symbol: a.symbol,
-                                  colorID: a.id, kind: .agent, outcome: .alreadyConnected))
-            } else if !a.selected, a.wasConnected {
-                rows.append(.init(id: "rm-\(a.id)", name: a.displayName, symbol: a.symbol,
-                                  colorID: a.id, kind: .agent, outcome: .disconnected))
-            }
+        for a in connect {
+            rows.append(.init(id: "reg-\(a.id)", name: a.displayName, symbol: a.symbol,
+                              colorID: a.id, kind: .agent))
         }
-
-        let connectingAgents = agents.filter { $0.selected && $0.isInstalled && !$0.wasConnected }
-        if agents.contains(where: { $0.selected && $0.isInstalled }) {
+        for a in disconnect {
+            rows.append(.init(id: "rm-\(a.id)", name: a.displayName, symbol: a.symbol,
+                              colorID: a.id, kind: .agent))
+        }
+        if !connect.isEmpty {
             rows.append(.init(id: "canonical", name: "~/.localmem/AGENTS.md", symbol: "doc.text",
-                              colorID: nil, kind: .instruction, outcome: .instructionsInstalled))
-            for a in connectingAgents {
+                              colorID: nil, kind: .instruction))
+            for a in connect {
                 rows.append(.init(id: "imp-\(a.id)", name: a.displayName, symbol: a.symbol,
-                                  colorID: a.id, kind: .instruction, outcome: .importAdded))
+                                  colorID: a.id, kind: .instruction))
             }
         }
         return rows
     }
 
+    private func finalizeConnectRows(_ connect: [WizardAgent], error: String?) async {
+        for agent in connect {
+            let registered = isRegistered(agent.id)
+            let outcome: WizardRunOutcome = registered
+                ? (agent.wasConnected ? .alreadyConnected : .connected)
+                : .failed(error ?? "registration did not complete")
+            try? await Task.sleep(for: .milliseconds(150))
+            update(rowID: "reg-\(agent.id)") { $0.state = .done(outcome) }
+            update(rowID: "imp-\(agent.id)") {
+                $0.state = .done(self.hasImport(agent.id) ? .importAdded : .failed("import line missing"))
+            }
+        }
+        update(rowID: "canonical") {
+            $0.state = .done(error == nil ? .instructionsInstalled : .failed("setup failed"))
+        }
+    }
+
+    private func update(rowID: String, _ transform: (inout WizardRunRow) -> Void) {
+        if let index = runRows.firstIndex(where: { $0.id == rowID }) { transform(&runRows[index]) }
+    }
+
     // MARK: Summary
 
-    var connectedCount: Int {
-        runRows.filter { $0.kind == .agent && isConnectOutcome($0.outcome) }.count
-    }
-    var disconnectedCount: Int {
-        runRows.filter { if case .disconnected = $0.outcome { return true }; return false }.count
-    }
-    var failedCount: Int {
-        runRows.filter { if case .failed = $0.outcome { return true }; return false }.count
+    private func outcome(_ row: WizardRunRow) -> WizardRunOutcome? {
+        if case .done(let o) = row.state { return o }
+        return nil
     }
 
-    private func isConnectOutcome(_ o: WizardRunOutcome) -> Bool {
-        switch o {
-        case .connected, .alreadyConnected: return true
-        default: return false
-        }
+    var connectedCount: Int {
+        runRows.filter { row in
+            guard row.kind == .agent, let o = outcome(row) else { return false }
+            switch o { case .connected, .alreadyConnected: return true; default: return false }
+        }.count
+    }
+    var disconnectedCount: Int {
+        runRows.filter { if case .disconnected? = outcome($0) { return true }; return false }.count
+    }
+    var failedCount: Int {
+        runRows.filter { if case .failed? = outcome($0) { return true }; return false }.count
     }
 }
 
@@ -299,7 +329,14 @@ final class WizardMockModel {
 
 struct SetupWizardView: View {
     @Binding var isPresented: Bool
-    @State private var model = WizardMockModel()
+    let onFinish: () -> Void
+    @State private var model: SetupWizardModel
+
+    init(isPresented: Binding<Bool>, mode: SetupWizardMode = .firstRun, onFinish: @escaping () -> Void = {}) {
+        self._isPresented = isPresented
+        self.onFinish = onFinish
+        self._model = State(initialValue: SetupWizardModel(mode: mode))
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -308,6 +345,11 @@ struct SetupWizardView: View {
             bodyColumn
         }
         .frame(width: 680, height: 520)
+    }
+
+    private func finish() {
+        onFinish()
+        isPresented = false
     }
 
     // MARK: Left rail
@@ -371,7 +413,7 @@ struct SetupWizardView: View {
         case .protectVault where !model.touchIDEnabled && model.touchIDState != .authenticating:
             Button("Not now") { withAnimation(.snappy) { model.next() } }
         case .access:
-            Button("Set up access later") { isPresented = false }
+            Button("Set up access later") { finish() }
         default:
             EmptyView()
         }
@@ -411,18 +453,15 @@ struct SetupWizardView: View {
     private func primaryAction() {
         switch model.currentStep {
         case .protectVault where !model.touchIDEnabled:
-            // Enable / Try Again — fire the prompt, but don't advance. The user
-            // moves on with Continue once success is shown.
             model.enableTouchID()
         case .run where model.runComplete && model.mode == .reconfigure:
-            isPresented = false
+            finish()
         case .access:
-            isPresented = false
+            finish()
         default:
             withAnimation(.snappy) { model.next() }
         }
     }
-
 }
 
 // MARK: - Shared hero
@@ -478,7 +517,7 @@ private struct WizardBullet: View {
 }
 
 private struct WizardProtectScreen: View {
-    @Bindable var model: WizardMockModel
+    @Bindable var model: SetupWizardModel
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             WizardHero(symbol: "lock.shield")
@@ -531,7 +570,7 @@ private struct WizardProtectScreen: View {
 }
 
 private struct WizardReviewScreen: View {
-    @Bindable var model: WizardMockModel
+    @Bindable var model: SetupWizardModel
 
     private var installedCount: Int { model.agents.filter(\.isInstalled).count }
 
@@ -607,7 +646,7 @@ private struct WizardAgentRow: View {
 }
 
 private struct WizardRunScreen: View {
-    @Bindable var model: WizardMockModel
+    @Bindable var model: SetupWizardModel
 
     private var agentRows: [WizardRunRow] { model.runRows.filter { $0.kind == .agent } }
     private var instructionRows: [WizardRunRow] { model.runRows.filter { $0.kind == .instruction } }
@@ -682,10 +721,10 @@ private struct WizardRunRowView: View {
                 Image(systemName: "circle.dotted").foregroundStyle(.tertiary)
             case .running:
                 ProgressView().controlSize(.small)
-            case .done:
+            case .done(let outcome):
                 HStack(spacing: 6) {
-                    Text(row.outcome.label).font(.callout).foregroundStyle(.secondary)
-                    Image(systemName: row.outcome.symbol).foregroundStyle(row.outcome.tint)
+                    Text(outcome.label).font(.callout).foregroundStyle(.secondary)
+                    Image(systemName: outcome.symbol).foregroundStyle(outcome.tint)
                 }
             }
         }

@@ -488,9 +488,8 @@ struct ContentView: View {
     @State private var sidebarCollapsed = false
     @FocusState private var searchFocused: Bool
     @AppStorage("seenWizard") private var seenWizard = false
-    @State private var showWizard = false
-    @State private var wizardStart: WizardStep = .welcome
-    @State private var showMockWizard = false
+    @State private var showSetupWizard = false
+    @State private var wizardMode: SetupWizardMode = .firstRun
 
     var body: some View {
         // Two-level layout so the status bar spans the full window width:
@@ -534,8 +533,8 @@ struct ContentView: View {
                         onEditMemory: { memory in sheet = .editMemory(memory) },
                         onConfigureAgent: { agent in sheet = .agentDetails(agent) },
                         onReconfigureAgents: {
-                            wizardStart = .agents
-                            showWizard = true
+                            wizardMode = .reconfigure
+                            showSetupWizard = true
                         },
                         onShowAuditTrail: { memory in
                             auditMemoryFilter = memory.id
@@ -553,7 +552,10 @@ struct ContentView: View {
                             selectedComingSoon = nil
                             withAnimation(.snappy) { section = .memories }
                         },
-                        onTestWizard: { showMockWizard = true }
+                        onTestWizard: {
+                            wizardMode = .firstRun
+                            showSetupWizard = true
+                        }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay {
@@ -580,8 +582,8 @@ struct ContentView: View {
         .background { sectionShortcuts }
         .onAppear {
             if !seenWizard {
-                wizardStart = .welcome
-                showWizard = true
+                wizardMode = .firstRun
+                showSetupWizard = true
             }
         }
         .task(id: query) { await memoryVM?.search(query) }
@@ -593,14 +595,11 @@ struct ContentView: View {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
-        .sheet(isPresented: $showWizard) {
-            WizardView(startStep: wizardStart) {
+        .sheet(isPresented: $showSetupWizard) {
+            SetupWizardView(isPresented: $showSetupWizard, mode: wizardMode) {
                 seenWizard = true
-                showWizard = false
+                Task { await statusVM?.refresh() }
             }
-        }
-        .sheet(isPresented: $showMockWizard) {
-            SetupWizardView(isPresented: $showMockWizard)
         }
         .sheet(item: $sheet) { kind in
             switch kind {
@@ -2689,167 +2688,6 @@ struct LockScreen: View {
         } else {
             failed = true
         }
-    }
-}
-
-// MARK: - First-run wizard (Phase 16)
-
-enum WizardStep: Int, CaseIterable, Identifiable {
-    case welcome, protectVault, agents
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .welcome:      return "Welcome"
-        case .protectVault: return "Protect your vault"
-        case .agents:       return "Connect agents"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .welcome:      return "sparkles"
-        case .protectVault: return "lock.shield"
-        case .agents:       return "person.2"
-        }
-    }
-
-    var blurb: String {
-        switch self {
-        case .welcome:      return "Localmem is a local, private memory your AI agents can read and write across every project."
-        case .protectVault: return "Lock the vault behind Touch ID so only you can open it. You can toggle this anytime from the status bar."
-        case .agents:       return "Run `localmem setup` to register Localmem with Claude Code, Claude Desktop, Cursor, Codex, and Antigravity."
-        }
-    }
-}
-
-struct WizardView: View {
-    let startStep: WizardStep
-    let onFinish: () -> Void
-    @State private var step: WizardStep
-    @State private var setupInProgress = false
-    @State private var setupMessage: String?
-
-    init(startStep: WizardStep = .welcome, onFinish: @escaping () -> Void) {
-        self.startStep = startStep
-        self.onFinish = onFinish
-        _step = State(initialValue: startStep)
-    }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Step rail
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Get started").font(.headline).padding(.bottom, 4)
-                ForEach(WizardStep.allCases) { s in
-                    HStack(spacing: 10) {
-                        Image(systemName: s.rawValue < step.rawValue ? "checkmark.circle.fill" : s.symbol)
-                            .foregroundStyle(s == step ? Color.accentColor : (s.rawValue < step.rawValue ? Color.green : Color.secondary))
-                            .frame(width: 20)
-                        Text(s.title)
-                            .fontWeight(s == step ? .semibold : .regular)
-                            .foregroundStyle(s == step ? .primary : .secondary)
-                    }
-                }
-                Spacer()
-            }
-            .padding(20)
-            .frame(width: 200, alignment: .leading)
-            .background(.background.secondary)
-
-            Divider()
-
-            // Body
-            VStack(alignment: .leading, spacing: 16) {
-                Image(systemName: step.symbol).font(.system(size: 40)).foregroundStyle(.tint)
-                Text(step.title).font(.title.weight(.bold))
-                Text(step.blurb).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if step == .agents {
-                    AgentSetupWizardPanel(
-                        setupInProgress: setupInProgress,
-                        setupMessage: setupMessage,
-                        onRunSetup: runSetup
-                    )
-                }
-                Spacer()
-                HStack {
-                    if step != startStep {
-                        Button("Back") { withAnimation { step = WizardStep(rawValue: step.rawValue - 1) ?? .welcome } }
-                    }
-                    Spacer()
-                    if step == WizardStep.allCases.last {
-                        Button("Get Started") { onFinish() }.keyboardShortcut(.defaultAction)
-                    } else {
-                        Button("Next") { withAnimation { step = WizardStep(rawValue: step.rawValue + 1) ?? step } }
-                            .keyboardShortcut(.defaultAction)
-                    }
-                }
-            }
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(width: 640, height: 420)
-    }
-
-    private func runSetup() {
-        setupInProgress = true
-        setupMessage = nil
-        Task {
-            do {
-                _ = try await AgentConfigurationInspector.repairAll()
-                setupMessage = "Agent setup finished."
-            } catch {
-                setupMessage = "Setup failed: \(error.localizedDescription)"
-            }
-            setupInProgress = false
-        }
-    }
-}
-
-struct AgentSetupWizardPanel: View {
-    let setupInProgress: Bool
-    let setupMessage: String?
-    let onRunSetup: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(KnownAgents.all, id: \.id) { known in
-                let snapshot = AgentSnapshot(
-                    id: known.id,
-                    displayName: known.displayName,
-                    symbol: known.symbol,
-                    isConnected: false,
-                    lastAccess: nil,
-                    reads: 0,
-                    writes: 0
-                )
-                let state = AgentConfigurationInspector.state(for: snapshot)
-                HStack(spacing: 10) {
-                    Image(systemName: known.symbol)
-                        .foregroundStyle(SourcePalette.color(for: known.id) ?? .gray)
-                        .frame(width: 20)
-                    Text(known.displayName)
-                    Spacer()
-                    Pill(text: state.statusText, color: state.statusColor)
-                }
-            }
-
-            Button(setupInProgress ? "Configuring..." : "Configure Agents") {
-                onRunSetup()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(setupInProgress)
-            .padding(.top, 4)
-
-            if let setupMessage {
-                Text(setupMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(12)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
