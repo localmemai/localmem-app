@@ -12,6 +12,11 @@ struct LocalmemApp: App {
         // NSApp — the latter is nil before SwiftUI bootstraps the app.
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
+        // A bare executable has no bundle icon, so the Dock shows a generic
+        // tool icon. Render the brand mark and set it explicitly.
+        if let icon = LocalmemMark.dockIcon() {
+            NSApplication.shared.applicationIconImage = icon
+        }
     }
 
     var body: some Scene {
@@ -801,9 +806,18 @@ struct LocalmemMark: View {
             Text("m")
                 .font(.system(size: size * (52.0 / 160.0), weight: .heavy))
                 .foregroundStyle(Self.gradient)
-                .offset(y: size * (5.0 / 160.0))
+                .offset(y: -size * (2.0 / 160.0))
         }
         .frame(width: size, height: size)
+    }
+
+    /// The mark rendered to an `NSImage` for use as the Dock/app icon. Lets
+    /// dev runs of the bare SwiftPM executable show the brand instead of the
+    /// generic tool icon; packaged `.app` builds use `AppIcon.icns`.
+    @MainActor static func dockIcon() -> NSImage? {
+        let renderer = ImageRenderer(content: LocalmemMark(size: 512))
+        renderer.scale = 2
+        return renderer.nsImage
     }
 }
 
