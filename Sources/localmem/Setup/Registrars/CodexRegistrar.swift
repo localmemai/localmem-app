@@ -36,18 +36,17 @@ struct CodexRegistrar: ClientRegistrar {
 
     func registerViaConfigFile(binaryPath: String) throws -> RegistrationOutcome {
         var hadPrevious = false
+        // Build bottom-up and reassign each level top-down — see preauthorize
+        // for the rationale: TOMLKit's `.table` getter may hand back a snapshot,
+        // so mutating a sub-table after stashing it back via subscript can be
+        // lost.
         let changed = try TOMLConfig.update(at: configURL) { table in
-            let mcpServers: TOMLTable
-            if let existing = table["mcp_servers"]?.table {
-                mcpServers = existing
-                hadPrevious = existing["localmem"] != nil
-            } else {
-                mcpServers = TOMLTable()
-                table["mcp_servers"] = mcpServers
-            }
+            let mcpServers = table["mcp_servers"]?.table ?? TOMLTable()
+            hadPrevious = mcpServers["localmem"] != nil
             let entry = TOMLTable()
             entry["command"] = binaryPath
             mcpServers["localmem"] = entry
+            table["mcp_servers"] = mcpServers
         }
         if !changed { return .alreadyRegistered(via: .configFile) }
         return hadPrevious ? .updated(via: .configFile) : .registered(via: .configFile)

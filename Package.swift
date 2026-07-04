@@ -68,5 +68,9 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
+        .testTarget(
+            name: "LocalmemAppTests",
+            dependencies: ["localmem-app", "LocalmemCore"]
+        ),
     ]
 )

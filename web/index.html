@@ -42,6 +42,73 @@
     .lm-foot-a{transition:color .15s}
     .lm-foot-a:hover{color:#fff}
 
+    /* active nav highlight */
+    .lm-nav-a{position:relative}
+    .lm-nav-a.active{color:#fff}
+    .lm-nav-a.active::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:2px;border-radius:2px;background:linear-gradient(90deg,#4d8dff,#35d0e0,#a07dff)}
+
+    /* carousel */
+    .lm-carousel{position:relative;max-width:900px;margin:0 auto}
+    .lm-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scroll-behavior:smooth;scrollbar-width:none;transition:height .28s ease}
+    .lm-track::-webkit-scrollbar{display:none}
+    .lm-slide{flex:0 0 100%;scroll-snap-align:center;display:flex;justify-content:center;align-items:flex-start;padding:6px 4px 4px}
+    .lm-arrow{position:absolute;top:44%;transform:translateY(-50%);z-index:5;width:42px;height:42px;border-radius:50%;background:rgba(20,22,30,0.85);border:1px solid rgba(255,255,255,0.14);color:#e8eaf0;font-size:22px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);transition:background .15s,border-color .15s}
+    .lm-arrow:hover{background:rgba(30,33,44,0.95);border-color:rgba(53,208,224,0.4)}
+    .lm-arrow.prev{left:-52px}
+    .lm-arrow.next{right:-52px}
+    .lm-dots{display:flex;gap:8px;justify-content:center;margin-top:24px}
+    .lm-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.18);border:none;cursor:pointer;padding:0;transition:width .2s,background .2s}
+    .lm-dot.active{width:24px;border-radius:5px;background:linear-gradient(90deg,#4d8dff,#35d0e0,#a07dff)}
+    .lm-cap{text-align:center;color:#9096a6;font-size:14.5px;margin-top:18px;min-height:20px;padding:0 12px}
+
+    /* terminal code box */
+    .lm-term{width:100%;max-width:760px;border-radius:16px;overflow:hidden;background:rgba(14,16,23,0.9);border:1px solid rgba(255,255,255,0.09);box-shadow:0 30px 80px rgba(0,0,0,0.55),0 0 0 1px rgba(53,208,224,0.06)}
+    .lm-termbar{display:flex;align-items:center;gap:8px;padding:13px 16px;background:rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.06)}
+    .lm-termbar i{width:12px;height:12px;border-radius:50%;display:block}
+    .lm-termbar .t{margin-left:10px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#6b7185}
+    .lm-termbody{padding:22px 24px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.85;text-align:left;color:#e8eaf0;min-height:198px}
+    .lm-c-cmt{color:#6b7185}
+    .lm-c-ag{color:#a07dff}
+    .lm-c-ar{color:#6b7185}
+    .lm-c-fn{color:#35d0e0}
+    .lm-c-str{color:#9ece6a}
+    .lm-c-ok{color:#35d0e0}
+    .lm-c-loc{color:#4d8dff}
+    .lm-c-tx{color:#e8eaf0}
+    .lm-recall{margin-top:4px;padding:10px 14px;border-radius:9px;background:rgba(77,141,255,0.07);border:1px solid rgba(77,141,255,0.14);color:#c3c8d6}
+    .lm-rrow{display:flex;justify-content:space-between;gap:16px;margin-top:6px}
+
+    /* mock app window (light, like the real app) */
+    .lm-win{width:100%;max-width:840px;border-radius:14px;overflow:hidden;background:#eef1f6;color:#16181d;border:1px solid rgba(255,255,255,0.1);box-shadow:0 30px 80px rgba(0,0,0,0.5)}
+    .lm-wbar{display:flex;align-items:center;gap:7px;padding:11px 14px;background:#e3e8f0;border-bottom:1px solid rgba(0,0,0,0.08)}
+    .lm-wbar i{width:11px;height:11px;border-radius:50%;display:block}
+    .lm-wbar .t{margin-left:10px;font-size:12px;color:#69707d;font-weight:500}
+    .lm-wbody{display:flex;min-height:312px}
+    .lm-wside{width:172px;background:#e7ebf2;border-right:1px solid rgba(0,0,0,0.06);padding:14px 12px;flex-shrink:0}
+    .lm-wside .h{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#8a91a0;font-weight:700;margin:0 6px 10px}
+    .lm-si{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;font-size:13.5px;color:#42474f;margin-bottom:2px}
+    .lm-si.on{background:#fff;color:#16181d;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.06)}
+    .lm-wmain{flex:1;padding:18px 20px;min-width:0}
+    .lm-wh{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px}
+    .lm-wh h4{font-size:16px;font-weight:700;margin:0}
+    .lm-wh span{font-size:12.5px;color:#8a91a0}
+    .lm-mem{background:#fff;border:1px solid rgba(0,0,0,0.07);border-radius:10px;padding:12px 14px;margin-bottom:9px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+    .lm-mem .mt{font-weight:600;font-size:14px;margin-bottom:3px}
+    .lm-mem .mb{font-size:13px;color:#5c626e;margin-bottom:8px}
+    .lm-tag{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;white-space:nowrap}
+    .lm-b-blue{background:rgba(23,105,224,0.1);color:#1769e0}
+    .lm-b-green{background:rgba(27,138,74,0.12);color:#1b8a4a}
+    .lm-b-amber{background:rgba(180,106,0,0.13);color:#b46a00}
+    .lm-b-grey{background:rgba(105,112,125,0.14);color:#69707d}
+    .lm-b-red{background:rgba(211,52,47,0.1);color:#d3342f}
+    .lm-b-purple{background:rgba(117,87,216,0.13);color:#7557d8}
+    .lm-row{display:flex;align-items:center;gap:12px;padding:11px 14px;background:#fff;border:1px solid rgba(0,0,0,0.07);border-radius:10px;margin-bottom:9px}
+    .lm-av{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0}
+    .lm-row .rn{font-weight:600;font-size:14px}
+    .lm-row .rs{font-size:12.5px;color:#8a91a0}
+    .lm-spacer{flex:1}
+    @media(max-width:820px){.lm-wside{display:none}.lm-arrow.prev{left:0}.lm-arrow.next{right:0}}
+
     @media(max-width:820px){
       .lm-navlinks{display:none!important}
       .lm-grid3{grid-template-columns:1fr!important}
@@ -68,6 +135,7 @@
       </a>
       <div class="lm-navlinks" style="display:flex;align-items:center;gap:30px;font-size:14.5px;color:#a6abbb;font-weight:500">
         <a class="lm-nav-a" href="#about">About</a>
+        <a class="lm-nav-a" href="#preview">Preview</a>
         <a class="lm-nav-a" href="#how">How it works</a>
         <a class="lm-nav-a" href="#works">Works with</a>
         <a class="lm-nav-a" href="https://github.com/localmem-ai/localmem-app" target="_blank" rel="noopener">GitHub</a>
@@ -93,23 +161,86 @@
       <p style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#6b7185;margin:22px 0 0;letter-spacing:0.01em">open source · runs 100% on-device · no account, no cloud</p>
     </section>
 
-    <!-- TERMINAL -->
-    <section style="padding:24px 0 20px;animation:lm-float 6s ease-in-out infinite">
-      <div style="max-width:760px;margin:0 auto;border-radius:16px;overflow:hidden;background:rgba(14,16,23,0.86);border:1px solid rgba(255,255,255,0.09);box-shadow:0 30px 80px rgba(0,0,0,0.55),0 0 0 1px rgba(53,208,224,0.06)">
-        <div style="display:flex;align-items:center;gap:8px;padding:13px 16px;background:rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.06)">
-          <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span>
-          <span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span>
-          <span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>
-          <span style="margin-left:10px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#6b7185">claude-code — localmem session</span>
+    <!-- TERMINAL CAROUSEL -->
+    <section style="padding:24px 0 20px">
+      <div class="lm-carousel" style="max-width:760px">
+        <button class="lm-arrow prev" aria-label="Previous example">‹</button>
+        <button class="lm-arrow next" aria-label="Next example">›</button>
+        <div class="lm-track">
+
+          <!-- search -->
+          <div class="lm-slide" data-cap="Search — pull the right memory in before answering.">
+            <div class="lm-term">
+              <div class="lm-termbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">claude-code — memory_search</span></div>
+              <div class="lm-termbody">
+                <div class="lm-c-cmt"># recall a preference before answering</div>
+                <div style="margin-top:6px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">→</span> <span class="lm-c-fn">memory_search</span>(<span class="lm-c-str">"coffee"</span>)</div>
+                <div style="margin-top:6px"><span class="lm-c-ok">✓</span> 1 memory recalled <span class="lm-c-ar">·</span> <span class="lm-c-loc">local</span></div>
+                <div class="lm-recall">→ <span class="lm-c-tx">"Prefers flat white with oat milk."</span></div>
+                <div style="margin-top:10px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">·</span> A flat white with oat milk, coming right up. <span class="lm-c-ok" style="animation:lm-pulse 1.2s infinite">▋</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- store -->
+          <div class="lm-slide" data-cap="Store — persist a new preference or decision.">
+            <div class="lm-term">
+              <div class="lm-termbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">claude-code — memory_store</span></div>
+              <div class="lm-termbody">
+                <div class="lm-c-cmt"># the user just made a decision worth keeping</div>
+                <div style="margin-top:6px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">→</span> <span class="lm-c-fn">memory_store</span>(<span class="lm-c-str">"Switched primary editor to Cursor."</span>)</div>
+                <div style="margin-top:6px"><span class="lm-c-ok">✓</span> saved <span class="lm-c-ar">·</span> <span class="lm-c-str">decision</span> <span class="lm-c-ar">·</span> <span class="lm-c-loc">local</span></div>
+                <div class="lm-recall">→ <span class="lm-c-tx">stored as memory #42, visible to this agent</span></div>
+                <div style="margin-top:10px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">·</span> Noted — I'll remember you're on Cursor now. <span class="lm-c-ok" style="animation:lm-pulse 1.2s infinite">▋</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- recent -->
+          <div class="lm-slide" data-cap="Recent — skim the latest memories at a glance.">
+            <div class="lm-term">
+              <div class="lm-termbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">claude-code — memory_recent</span></div>
+              <div class="lm-termbody">
+                <div class="lm-c-cmt"># what has the user told me lately?</div>
+                <div style="margin-top:6px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">→</span> <span class="lm-c-fn">memory_recent</span>(<span class="lm-c-tx">limit:</span> <span class="lm-c-str">3</span>)</div>
+                <div style="margin-top:6px"><span class="lm-c-ok">✓</span> 3 memories <span class="lm-c-ar">·</span> <span class="lm-c-loc">local</span></div>
+                <div class="lm-rrow"><span class="lm-c-tx">Coffee preference</span><span class="lm-c-fn">preference</span></div>
+                <div class="lm-rrow"><span class="lm-c-tx">Backend role</span><span class="lm-c-fn">fact</span></div>
+                <div class="lm-rrow"><span class="lm-c-tx">Linear INGEST tracker</span><span class="lm-c-fn">project</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- update -->
+          <div class="lm-slide" data-cap="Update — revise a memory in place when the fact changes.">
+            <div class="lm-term">
+              <div class="lm-termbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">claude-code — memory_update</span></div>
+              <div class="lm-termbody">
+                <div class="lm-c-cmt"># "actually I drink cortados now"</div>
+                <div style="margin-top:6px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">→</span> <span class="lm-c-fn">memory_update</span>(<span class="lm-c-tx">id:</span> <span class="lm-c-str">7</span>, <span class="lm-c-tx">content:</span> <span class="lm-c-str">"Prefers a cortado."</span>)</div>
+                <div style="margin-top:6px"><span class="lm-c-ok">✓</span> updated <span class="lm-c-ar">·</span> <span class="lm-c-str">preference</span> <span class="lm-c-ar">·</span> <span class="lm-c-loc">local</span></div>
+                <div class="lm-recall">→ <span class="lm-c-tx">"Prefers a cortado."</span> <span class="lm-c-cmt">(was: flat white)</span></div>
+                <div style="margin-top:10px"><span class="lm-c-ag">agent</span> <span class="lm-c-ar">·</span> Updated — cortado it is from now on. <span class="lm-c-ok" style="animation:lm-pulse 1.2s infinite">▋</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- delete -->
+          <div class="lm-slide" data-cap="Delete — forget a memory for good, on your command.">
+            <div class="lm-term">
+              <div class="lm-termbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">localmem — delete</span></div>
+              <div class="lm-termbody">
+                <div class="lm-c-cmt"># you decide what gets forgotten</div>
+                <div style="margin-top:6px"><span class="lm-c-loc">$</span> localmem delete <span class="lm-c-str">31</span></div>
+                <div style="margin-top:6px"><span class="lm-c-ok">✓</span> removed <span class="lm-c-tx">"Old API sandbox URL"</span> <span class="lm-c-ar">·</span> <span class="lm-c-loc">local</span></div>
+                <div class="lm-recall">→ <span class="lm-c-tx">gone from disk — no cloud copy to chase</span> <span class="lm-c-ok" style="animation:lm-pulse 1.2s infinite">▋</span></div>
+              </div>
+            </div>
+          </div>
+
         </div>
-        <div style="padding:22px 24px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.85;text-align:left">
-          <div style="color:#6b7185"># user asks about their coffee order</div>
-          <div style="color:#e8eaf0;margin-top:6px"><span style="color:#a07dff">agent</span> <span style="color:#6b7185">→</span> <span style="color:#35d0e0">memory_search</span>(<span style="color:#9ece6a">"coffee"</span>)</div>
-          <div style="margin-top:6px;color:#7a8096"><span style="color:#35d0e0">✓</span> 1 memory recalled <span style="color:#6b7185">·</span> <span style="color:#4d8dff">local</span></div>
-          <div style="margin-top:4px;padding:10px 14px;border-radius:9px;background:rgba(77,141,255,0.07);border:1px solid rgba(77,141,255,0.14);color:#c3c8d6">→ <span style="color:#e8eaf0">"Prefers flat white with oat milk."</span></div>
-          <div style="margin-top:12px;color:#e8eaf0"><span style="color:#a07dff">agent</span> <span style="color:#6b7185">·</span> Got it — a flat white with oat milk, just how you like it. Want me to</div>
-          <div style="color:#e8eaf0">place the usual order? <span style="color:#35d0e0;animation:lm-pulse 1.2s infinite">▋</span></div>
-        </div>
+        <div class="lm-dots"></div>
+        <div class="lm-cap"></div>
       </div>
     </section>
 
@@ -160,6 +291,112 @@
       </div>
     </section>
   </div>
+
+  <!-- PREVIEW / UI CAROUSEL -->
+  <section id="preview" style="position:relative;z-index:1;max-width:1160px;margin:0 auto;padding:90px 28px 30px">
+    <div style="text-align:center;margin-bottom:44px">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#35d0e0;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:14px">A look inside</div>
+      <h2 style="font-size:40px;font-weight:800;letter-spacing:-0.025em;line-height:1.12">See Localmem in action</h2>
+    </div>
+
+    <div class="lm-carousel">
+      <button class="lm-arrow prev" id="lm-prev" aria-label="Previous slide">‹</button>
+      <button class="lm-arrow next" id="lm-next" aria-label="Next slide">›</button>
+      <div class="lm-track" id="lm-track">
+
+        <!-- Slide 1: Vault -->
+        <div class="lm-slide" data-cap="Browse every memory in one calm vault — search, filter, and edit.">
+          <div class="lm-win">
+            <div class="lm-wbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Localmem — Vault</span></div>
+            <div class="lm-wbody">
+              <div class="lm-wside">
+                <div class="h">Memories</div>
+                <div class="lm-si on">🗂️ All memories</div>
+                <div class="lm-si">⭐ Preferences</div>
+                <div class="lm-si">✅ Decisions</div>
+                <div class="lm-si">👤 Facts</div>
+                <div class="lm-si">📁 Projects</div>
+              </div>
+              <div class="lm-wmain">
+                <div class="lm-wh"><h4>All memories</h4><span>6 shown</span></div>
+                <div class="lm-mem"><div class="mt">Coffee preference</div><div class="mb">Prefers flat white with oat milk.</div><span class="lm-tag lm-b-blue">preference</span></div>
+                <div class="lm-mem"><div class="mt">Backend role</div><div class="mb">Backend engineer with ten years of Go.</div><span class="lm-tag lm-b-purple">fact</span></div>
+                <div class="lm-mem"><div class="mt">Editor switch</div><div class="mb">Uses Cursor as the primary editor.</div><span class="lm-tag lm-b-green">decision</span></div>
+                <div class="lm-mem"><div class="mt">SF Mono editor font</div><div class="mb">Uses SF Mono at 13pt across editors.</div><span class="lm-tag lm-b-blue">preference</span></div>
+                <div class="lm-mem"><div class="mt">Vegan diet</div><div class="mb">Eats vegan — no dairy, meat, or eggs.</div><span class="lm-tag lm-b-purple">fact</span></div>
+                <div class="lm-mem"><div class="mt">Linear INGEST tracker</div><div class="mb">Tracks ingestion work in the Linear INGEST project.</div><span class="lm-tag lm-b-amber">project</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 2: Agents & access -->
+        <div class="lm-slide" data-cap="Give each agent its own access: full, scoped, or none.">
+          <div class="lm-win">
+            <div class="lm-wbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Localmem — Agents</span></div>
+            <div class="lm-wbody">
+              <div class="lm-wside">
+                <div class="h">Manage</div>
+                <div class="lm-si">🗂️ Vault</div>
+                <div class="lm-si on">🤖 Agents</div>
+                <div class="lm-si">📜 Activity</div>
+                <div class="lm-si">⚙️ Settings</div>
+              </div>
+              <div class="lm-wmain">
+                <div class="lm-wh"><h4>Agents &amp; access</h4><span>3 connected</span></div>
+                <div class="lm-row"><div class="lm-av" style="background:linear-gradient(135deg,#4d8dff,#35d0e0)">C</div><div><div class="rn">Claude Code</div><div class="rs">24 memories visible</div></div><div class="lm-spacer"></div><span class="lm-tag lm-b-green">Full access</span></div>
+                <div class="lm-row"><div class="lm-av" style="background:linear-gradient(135deg,#7557d8,#a07dff)">Cu</div><div><div class="rn">Cursor</div><div class="rs">12 memories visible</div></div><div class="lm-spacer"></div><span class="lm-tag lm-b-amber">Scoped</span></div>
+                <div class="lm-row"><div class="lm-av" style="background:#8a91a0">Co</div><div><div class="rn">Codex</div><div class="rs">No memories visible</div></div><div class="lm-spacer"></div><span class="lm-tag lm-b-grey">No access</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 3: Activity / audit log -->
+        <div class="lm-slide" data-cap="A complete, on-device audit trail of every read and write.">
+          <div class="lm-win">
+            <div class="lm-wbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Localmem — Activity</span></div>
+            <div class="lm-wbody">
+              <div class="lm-wside">
+                <div class="h">Manage</div>
+                <div class="lm-si">🗂️ Vault</div>
+                <div class="lm-si">🤖 Agents</div>
+                <div class="lm-si on">📜 Activity</div>
+                <div class="lm-si">⚙️ Settings</div>
+              </div>
+              <div class="lm-wmain">
+                <div class="lm-wh"><h4>Access log</h4><span>live</span></div>
+                <div class="lm-row"><span class="lm-tag lm-b-blue">search</span><div><div class="rn">Claude Code · "coffee"</div><div class="rs">1 memory recalled</div></div><div class="lm-spacer"></div><span class="rs">2m ago</span></div>
+                <div class="lm-row"><span class="lm-tag lm-b-green">store</span><div><div class="rn">Claude Code · Coffee preference</div><div class="rs">new memory saved</div></div><div class="lm-spacer"></div><span class="rs">2m ago</span></div>
+                <div class="lm-row"><span class="lm-tag lm-b-purple">recall</span><div><div class="rn">Cursor · Backend role</div><div class="rs">read by agent</div></div><div class="lm-spacer"></div><span class="rs">1h ago</span></div>
+                <div class="lm-row"><span class="lm-tag lm-b-red">denied</span><div><div class="rn">Codex · API keys</div><div class="rs">access not granted</div></div><div class="lm-spacer"></div><span class="rs">3h ago</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 4: Setup wizard -->
+        <div class="lm-slide" data-cap="One-click setup connects Localmem to the clients you already use.">
+          <div class="lm-win">
+            <div class="lm-wbar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span class="t">Localmem — Setup</span></div>
+            <div class="lm-wbody" style="display:block;padding:34px 30px">
+              <div style="text-align:center;max-width:440px;margin:0 auto">
+                <div style="width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#4d8dff,#35d0e0 55%,#a07dff);margin:0 auto 16px"></div>
+                <div style="font-size:20px;font-weight:700;margin-bottom:6px">Connect your AI clients</div>
+                <div style="font-size:13.5px;color:#69707d;margin-bottom:22px">Localmem found these on your Mac. Connect to register the memory server.</div>
+                <div class="lm-row" style="text-align:left"><div class="lm-av" style="background:linear-gradient(135deg,#4d8dff,#35d0e0)">C</div><div class="rn">Claude Code</div><div class="lm-spacer"></div><span class="lm-tag lm-b-green">✓ Connected</span></div>
+                <div class="lm-row" style="text-align:left"><div class="lm-av" style="background:#16181d">CD</div><div class="rn">Claude Desktop</div><div class="lm-spacer"></div><span class="lm-tag lm-b-green">✓ Connected</span></div>
+                <div class="lm-row" style="text-align:left"><div class="lm-av" style="background:linear-gradient(135deg,#7557d8,#a07dff)">Cu</div><div class="rn">Cursor</div><div class="lm-spacer"></div><span class="lm-tag lm-b-blue">Connect</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="lm-dots" id="lm-dots"></div>
+      <div class="lm-cap" id="lm-cap"></div>
+    </div>
+  </section>
 
   <!-- HOW IT WORKS -->
   <section id="how" style="position:relative;z-index:1;background:rgba(255,255,255,0.015);border-top:1px solid rgba(255,255,255,0.05);border-bottom:1px solid rgba(255,255,255,0.05);margin-top:70px">
@@ -259,6 +496,87 @@
       label.textContent = 'Copied ✓';
       clearTimeout(timer);
       timer = setTimeout(function () { label.textContent = 'Copy'; }, 1800);
+    });
+  })();
+
+  /* nav active highlight (scroll-spy + click) */
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.lm-nav-a'));
+    var map = {};
+    links.forEach(function (a) {
+      var href = a.getAttribute('href') || '';
+      if (href.charAt(0) === '#') map[href.slice(1)] = a;
+      a.addEventListener('click', function () {
+        if (href.charAt(0) !== '#') return;
+        links.forEach(function (l) { l.classList.remove('active'); });
+        a.classList.add('active');
+      });
+    });
+    if ('IntersectionObserver' in window) {
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (!e.isIntersecting) return;
+          var a = map[e.target.id];
+          if (!a) return;
+          links.forEach(function (l) { l.classList.remove('active'); });
+          a.classList.add('active');
+        });
+      }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+      Object.keys(map).forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) obs.observe(el);
+      });
+    }
+  })();
+
+  /* carousels (terminal demos + UI preview) */
+  (function () {
+    var carousels = document.querySelectorAll('.lm-carousel');
+    Array.prototype.forEach.call(carousels, function (root) {
+      var track = root.querySelector('.lm-track');
+      if (!track) return;
+      var slides = track.children;
+      var n = slides.length;
+      var dotsWrap = root.querySelector('.lm-dots');
+      var cap = root.querySelector('.lm-cap');
+      var prev = root.querySelector('.lm-arrow.prev');
+      var next = root.querySelector('.lm-arrow.next');
+      var dots = [];
+      if (dotsWrap) {
+        for (var i = 0; i < n; i++) {
+          (function (i) {
+            var d = document.createElement('button');
+            d.className = 'lm-dot';
+            d.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+            d.addEventListener('click', function () {
+              track.scrollTo({ left: i * track.clientWidth, behavior: 'smooth' });
+            });
+            dotsWrap.appendChild(d);
+            dots.push(d);
+          })(i);
+        }
+      }
+      function update() {
+        var idx = Math.max(0, Math.min(n - 1, Math.round(track.scrollLeft / track.clientWidth)));
+        for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('active', i === idx);
+        if (cap) cap.textContent = slides[idx].getAttribute('data-cap') || '';
+        var box = slides[idx].firstElementChild;
+        if (box) track.style.height = (box.offsetHeight + 12) + 'px';
+      }
+      if (prev) prev.addEventListener('click', function () {
+        track.scrollBy({ left: -track.clientWidth, behavior: 'smooth' });
+      });
+      if (next) next.addEventListener('click', function () {
+        track.scrollBy({ left: track.clientWidth, behavior: 'smooth' });
+      });
+      var raf;
+      track.addEventListener('scroll', function () {
+        if (raf) cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(update);
+      });
+      window.addEventListener('resize', update);
+      window.addEventListener('load', update);
+      update();
     });
   })();
 </script>

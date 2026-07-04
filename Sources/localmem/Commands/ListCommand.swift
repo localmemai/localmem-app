@@ -23,7 +23,7 @@ struct ListCommand: AsyncParsableCommand {
         do {
             try await activityStore.add(Activity(
                 actorKind: .cli,
-                actorID: ".user",
+                actorID: "user",
                 operation: "memory_recent",
                 resultCount: memories.count
             ))

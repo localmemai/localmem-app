@@ -19,6 +19,12 @@ public enum InstallationOutcome: Sendable {
     case skipped(reason: String)
 }
 
+public enum InstructionRemovalOutcome: Sendable {
+    case removed
+    case alreadyAbsent
+    case skipped(reason: String)
+}
+
 public enum InstructionsInstallError: Error, Sendable {
     case canonicalWriteFailed(URL, underlying: Error)
     case targetWriteFailed(URL, underlying: Error)
@@ -113,6 +119,34 @@ public struct InstructionsInstaller: Sendable {
         return fileExisted ? .imported : .created
     }
 
+    /// Remove Localmem's managed import line from a single agent instruction
+    /// file, preserving every other line verbatim.
+    public func removeImportLine(from target: AgentInstructionTarget) throws -> InstructionRemovalOutcome {
+        let targetURL = homeDir.appendingPathComponent(target.relativePath)
+        let parentDir = targetURL.deletingLastPathComponent()
+
+        guard FileManager.default.fileExists(atPath: parentDir.path) else {
+            return .skipped(reason: "\(target.displayName) not installed")
+        }
+        guard FileManager.default.fileExists(atPath: targetURL.path) else {
+            return .alreadyAbsent
+        }
+
+        let existing = try String(contentsOf: targetURL, encoding: .utf8)
+        let lines = existing.split(separator: "\n", omittingEmptySubsequences: false)
+        let filtered = lines.filter { !$0.contains("<!-- localmem -->") }
+        guard filtered.count != lines.count else { return .alreadyAbsent }
+
+        var updated = filtered.joined(separator: "\n")
+        if existing.hasSuffix("\n") { updated += "\n" }
+        do {
+            try updated.write(to: targetURL, atomically: true, encoding: .utf8)
+        } catch {
+            throw InstructionsInstallError.targetWriteFailed(targetURL, underlying: error)
+        }
+        return .removed
+    }
+
     /// Run the full install: canonical file + every target.
     /// Per-target errors are captured per row; canonical-write failure is fatal.
     public func installAll(targets: [AgentInstructionTarget] = defaultTargets) throws -> [TargetResult] {
@@ -123,8 +157,20 @@ public struct InstructionsInstaller: Sendable {
         }
     }
 
+    public func removeAll(targets: [AgentInstructionTarget] = defaultTargets) -> [RemovalResult] {
+        targets.map { target in
+            do { return .init(name: target.displayName, outcome: .success(try removeImportLine(from: target))) }
+            catch { return .init(name: target.displayName, outcome: .failure(error)) }
+        }
+    }
+
     public struct TargetResult: Sendable {
         public let name: String
         public let outcome: Result<InstallationOutcome, Error>
+    }
+
+    public struct RemovalResult: Sendable {
+        public let name: String
+        public let outcome: Result<InstructionRemovalOutcome, Error>
     }
 }

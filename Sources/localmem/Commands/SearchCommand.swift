@@ -26,7 +26,7 @@ struct SearchCommand: AsyncParsableCommand {
         do {
             try await activityStore.add(Activity(
                 actorKind: .cli,
-                actorID: ".user",
+                actorID: "user",
                 operation: "memory_search",
                 query: query,
                 resultCount: memories.count

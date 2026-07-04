@@ -32,7 +32,7 @@ struct AddCommand: AsyncParsableCommand {
             title: title,
             tags: tags,
             actorKind: .cli,
-            actorID: ".user"
+            actorID: "user"
         )
         if json {
             try OutputFormatter.printJSON([memory])

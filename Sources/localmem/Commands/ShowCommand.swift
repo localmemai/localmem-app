@@ -17,11 +17,14 @@ struct ShowCommand: AsyncParsableCommand {
     func run() async throws {
         let store = try MemoryStore()
 
+        try render(try await resolve(idOrPrefix: idOrPrefix, store: store))
+    }
+
+    func resolve(idOrPrefix: String, store: MemoryStore) async throws -> Memory {
         // Stage A: try the input as a full UUID.
         if let uuid = UUID(uuidString: idOrPrefix),
            let memory = try await store.get(id: uuid) {
-            try render(memory)
-            return
+            return memory
         }
 
         // Stage B: case-insensitive prefix match resolved by the store.
@@ -35,7 +38,7 @@ struct ShowCommand: AsyncParsableCommand {
         guard let memory = try await store.get(id: id) else {
             throw ValidationError("No memory matching '\(idOrPrefix)'.")
         }
-        try render(memory)
+        return memory
     }
 
     private func render(_ memory: Memory) throws {

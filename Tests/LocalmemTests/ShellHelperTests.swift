@@ -53,4 +53,37 @@ struct ShellHelperTests {
         #expect(s.contains("7"))
         #expect(s.contains("bad input"))
     }
+
+    @Test("run detaches stdin so a stdin-reading child gets EOF instead of hanging")
+    func runDetachesStdin() throws {
+        // `cat` with no args reads stdin to EOF. With stdin wired to /dev/null
+        // it returns immediately instead of blocking — the setup-hang fix. If
+        // stdin were the terminal, this would hang the test runner.
+        let result = try ShellHelper.run("/bin/cat", [])
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.isEmpty)
+    }
+
+    @Test("run terminates and throws .timedOut when a child overruns the timeout")
+    func runTimesOutOnHang() {
+        do {
+            _ = try ShellHelper.run("/bin/sh", ["-c", "sleep 30"], timeout: 1)
+            Issue.record("expected a timeout, but the command returned")
+        } catch let error as ShellHelper.ShellError {
+            guard case .timedOut = error else {
+                Issue.record("expected .timedOut, got \(error)")
+                return
+            }
+        } catch {
+            Issue.record("unexpected error type: \(error)")
+        }
+    }
+
+    @Test("ShellError.timedOut description names the command and the limit")
+    func timedOutDescription() {
+        let err = ShellHelper.ShellError.timedOut(command: "/bin/slow", seconds: 5)
+        let s = String(describing: err)
+        #expect(s.contains("/bin/slow"))
+        #expect(s.contains("5"))
+    }
 }
