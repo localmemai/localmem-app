@@ -90,6 +90,20 @@ enum Migrations {
             try db.execute(sql: "CREATE INDEX idx_activity_occurred_at ON activity(occurred_at DESC)")
             try db.execute(sql: "CREATE INDEX idx_activity_actor ON activity(actor_kind, actor_id)")
 
+            // Which memories a single activity touched. A read (search/recent)
+            // returns many memories but records one activity row with no single
+            // `memory_id`, so per-memory audit filtering can't attribute reads
+            // without this join. ON DELETE CASCADE keeps it pruned when the
+            // activity-cap trigger deletes old rows.
+            try db.execute(sql: """
+                CREATE TABLE activity_memory (
+                    activity_id TEXT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
+                    memory_id TEXT NOT NULL,
+                    PRIMARY KEY (activity_id, memory_id)
+                )
+                """)
+            try db.execute(sql: "CREATE INDEX idx_activity_memory_memory ON activity_memory(memory_id)")
+
             // Sample every 1000 inserts instead of COUNT(*) on every one.
             // Worst-case overshoot is ~1000 rows, acceptable for a 100k audit cap.
             try db.execute(sql: """

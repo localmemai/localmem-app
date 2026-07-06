@@ -17,6 +17,8 @@ jobs:
     # GitHub-hosted image; pin to a specific image (e.g. `macos-26`) once it is
     # available and stable in your org.
     runs-on: macos-latest
+    # Safety net: a stuck test should fail fast, not burn hours.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,16 @@ jobs:
 
       - name: Swift version
         run: swift --version
+
+      # Cache resolved/compiled SwiftPM artifacts so runs don't re-download and
+      # rebuild every dependency each time. Keyed on Package.resolved.
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
 
       - name: Build
         run: swift build --build-tests

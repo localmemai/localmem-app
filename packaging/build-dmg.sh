@@ -51,7 +51,10 @@ RES_DIR="$APP/Contents/Resources"
 DMG="$OUT_DIR/Localmem-$VERSION.dmg"
 
 BINARIES=(localmem-app localmem localmem-mcp)
-RESOURCE_BUNDLES=(Localmem_LocalmemCore.bundle GRDB_GRDB.bundle)
+# SwiftPM resource bundles (*.bundle) are discovered from the build products at
+# assembly time, so a newly added one (e.g. the app's AgentIcons) travels
+# automatically instead of needing this list kept in sync.
+RESOURCE_BUNDLES=()
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
@@ -69,9 +72,14 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 for bin in "${BINARIES[@]}"; do
 	cp "$BIN_PATH/$bin" "$MACOS_DIR/$bin"
 done
-for b in "${RESOURCE_BUNDLES[@]}"; do
-	[ -e "$BIN_PATH/$b" ] && cp -R "$BIN_PATH/$b" "$MACOS_DIR/$b"
-done
+# Copy every SwiftPM resource bundle next to the binaries so Bundle.module
+# resolves (LocalmemCore's AGENTS.md, GRDB, the app's AgentIcons, …).
+while IFS= read -r bundle; do
+	[ -n "$bundle" ] || continue
+	name="$(basename "$bundle")"
+	cp -R "$bundle" "$MACOS_DIR/$name"
+	RESOURCE_BUNDLES+=("$name")
+done < <(find "$BIN_PATH" -maxdepth 1 -name '*.bundle')
 
 # Info.plist with the concrete version/id substituted in.
 sed -e "s/__BUNDLE_ID__/$BUNDLE_ID/" \

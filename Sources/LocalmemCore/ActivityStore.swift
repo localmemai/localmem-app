@@ -23,6 +23,22 @@ public actor ActivityStore {
         }
     }
 
+    /// Insert an activity along with the set of memories it touched. Used by
+    /// reads (search/recent), which return many memories under one activity row;
+    /// the links let per-memory audit filtering attribute those reads. Written in
+    /// one transaction so the row and its links can't diverge.
+    public func add(_ activity: Activity, memoryIDs: [UUID]) async throws {
+        try await database.write { db in
+            try Self.add(activity, in: db)
+            for memoryID in Set(memoryIDs) {
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO activity_memory (activity_id, memory_id) VALUES (?, ?)",
+                    arguments: [activity.id.uuidString, memoryID.uuidString]
+                )
+            }
+        }
+    }
+
     public func recent(limit: Int = 100) async throws -> [Activity] {
         try await database.read { db in
             let rows = try Row.fetchAll(
@@ -31,6 +47,28 @@ public actor ActivityStore {
                 arguments: [max(1, limit)]
             )
             return try rows.map(Self.decode(row:))
+        }
+    }
+
+    /// The memories each of the given activities touched, via `activity_memory`.
+    /// Only activities that recorded links (reads) appear in the result.
+    public func memoryLinks(activityIDs: [UUID]) async throws -> [UUID: Set<UUID>] {
+        guard !activityIDs.isEmpty else { return [:] }
+        return try await database.read { db in
+            let placeholders = databaseQuestionMarks(count: activityIDs.count)
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT activity_id, memory_id FROM activity_memory WHERE activity_id IN (\(placeholders))",
+                arguments: StatementArguments(activityIDs.map(\.uuidString))
+            )
+            var links: [UUID: Set<UUID>] = [:]
+            for row in rows {
+                guard let aid: String = row["activity_id"], let activityID = UUID(uuidString: aid),
+                      let mid: String = row["memory_id"], let memoryID = UUID(uuidString: mid)
+                else { continue }
+                links[activityID, default: []].insert(memoryID)
+            }
+            return links
         }
     }
 

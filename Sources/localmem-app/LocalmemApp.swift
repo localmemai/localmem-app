@@ -78,17 +78,31 @@ enum SourcePalette {
     }
 }
 
-struct SourceDot: View {
+/// The agent that wrote (or acted on) a memory, shown as that agent's brand
+/// mark via `AgentIcon` — so a Cursor-authored memory shows the Cursor logo, a
+/// Claude one the Claude mark, and the local user a person glyph. Lets you see
+/// *who* added each memory at a glance, in the list and the audit log.
+struct SourceIcon: View {
     let source: String?
-    var size: CGFloat = 10
+    var size: CGFloat = 16
 
     var body: some View {
-        if let color = SourcePalette.color(for: source) {
-            Circle().fill(color).frame(width: size, height: size)
-        } else {
-            Circle().stroke(.gray.opacity(0.6), lineWidth: 1)
-                .frame(width: size, height: size)
+        AgentIcon(agentID: source ?? "", symbol: Self.fallbackSymbol(for: source), size: size)
+            .foregroundStyle(Self.tint(for: source))
+    }
+
+    /// SF Symbol used when there's no brand asset (local user or unknown source).
+    static func fallbackSymbol(for source: String?) -> String {
+        switch source {
+        case "user":  return "person.crop.circle.fill"
+        case nil, "": return "questionmark.circle"
+        default:      return "sparkle"
         }
+    }
+
+    /// Tint for the SF Symbol fallback (brand PNGs render as-is and ignore it).
+    private static func tint(for source: String?) -> Color {
+        source == "user" ? .accentColor : .secondary
     }
 }
 
@@ -329,6 +343,16 @@ enum AgentConfigurationInspector {
 
             let stdout = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            // Diagnostic: the wizard has reported "failed" while agents were in
+            // fact registered and connecting. Capture what the setup subprocess
+            // actually did so a reproduction shows whether the failure is real or
+            // a post-run re-check mismatch.
+            Log.info(.setup, "localmem setup subprocess finished", [
+                "executable": process.executableURL?.path ?? "nil",
+                "exit_code": String(process.terminationStatus),
+                "stdout": String(stdout.suffix(2000)),
+                "stderr": String(stderr.suffix(2000)),
+            ])
             guard process.terminationStatus == 0 else {
                 throw NSError(
                     domain: "LocalmemAgentSetup",
@@ -1311,7 +1335,7 @@ struct RecentMemoryRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 10) {
-                SourceDot(source: memory.source)
+                SourceIcon(source: memory.source, size: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(memory.title ?? String(memory.content.prefix(40)))
                         .lineLimit(1)
@@ -1451,7 +1475,7 @@ struct MemoryListRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            SourceDot(source: memory.source)
+            SourceIcon(source: memory.source, size: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(memory.title ?? String(memory.content.prefix(40)))
                     .lineLimit(1)
@@ -1573,7 +1597,7 @@ struct MetadataStrip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            SourceDot(source: memory.source, size: 8)
+            SourceIcon(source: memory.source, size: 14)
             Text(memory.source ?? "unknown")
             Bullet()
             Text(memory.type.rawValue)
@@ -1611,9 +1635,9 @@ struct AgentAccessSummary: View {
             ForEach(KnownAgents.all, id: \.id) { agent in
                 let allowed = !excluded.contains(agent.id)
                 HStack(spacing: 8) {
-                    Image(systemName: agent.symbol)
+                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 18)
                         .foregroundStyle(allowed ? (SourcePalette.color(for: agent.id) ?? .gray) : Color.gray.opacity(0.5))
-                        .frame(width: 18)
+                        .opacity(allowed ? 1 : 0.5)
                     Text(agent.displayName)
                         .foregroundStyle(allowed ? .primary : .secondary)
                     Text(agent.id)
@@ -1878,7 +1902,7 @@ struct MemoryEditorView: View {
                             ForEach(KnownAgents.all, id: \.id) { agent in
                                 Toggle(isOn: accessBinding(for: agent.id)) {
                                     HStack(spacing: 8) {
-                                        Image(systemName: agent.symbol)
+                                        AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 16)
                                             .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
                                         Text(agent.displayName)
                                         Text(agent.id)
@@ -2162,7 +2186,7 @@ struct AgentCard: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill((SourcePalette.color(for: agent.id) ?? .gray).opacity(0.18))
                         .frame(width: 36, height: 36)
-                    Image(systemName: agent.symbol)
+                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 20)
                         .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -2236,7 +2260,7 @@ struct AgentDetailsSheet: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
-                    Image(systemName: agent.symbol)
+                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 18)
                         .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
                     Text(agent.id).font(.callout).foregroundStyle(.secondary)
                     Spacer()
@@ -2442,9 +2466,8 @@ struct AgentAccessCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: agent.symbol)
+                AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 22)
                     .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                    .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(agent.displayName).font(.callout.weight(.semibold))
                     Text(agent.id).font(.caption).foregroundStyle(.secondary)
@@ -2479,7 +2502,7 @@ struct AgentAccessCard: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(row.blocked) { memory in
                         HStack(spacing: 8) {
-                            SourceDot(source: memory.source, size: 7)
+                            SourceIcon(source: memory.source, size: 14)
                             Text(memory.title ?? String(memory.content.prefix(48)))
                                 .lineLimit(1)
                             Spacer()
@@ -2524,6 +2547,9 @@ final class AuditLogViewModel {
 
     private(set) var all: [Activity] = []
     private(set) var memories: [Memory] = []
+    // activity id → memories that read touched (search/recent), so per-memory
+    // filtering can attribute reads, which carry no single `memoryID`.
+    private(set) var memoryLinks: [UUID: Set<Memory.ID>] = [:]
     private(set) var loadError: String?
     var actorFilter: String?            // nil = every actor
 
@@ -2540,6 +2566,7 @@ final class AuditLogViewModel {
             async let memoryRows = memoryStore.recent(limit: 500)
             all = try await activityRows
             memories = try await memoryRows
+            memoryLinks = try await store.memoryLinks(activityIDs: all.map(\.id))
             loadError = nil
         }
         catch { loadError = String(describing: error) }
@@ -2549,7 +2576,10 @@ final class AuditLogViewModel {
 
     var memoryChoices: [MemoryChoice] {
         let indexed = Dictionary(uniqueKeysWithValues: memories.map { ($0.id, $0) })
-        let ids = Set(all.compactMap(\.memoryID))
+        // Memories that appear directly on a write/block row, plus those a read
+        // touched via the join — so the filter lists memories that were only read.
+        var ids = Set(all.compactMap(\.memoryID))
+        for linked in memoryLinks.values { ids.formUnion(linked) }
         return ids.sorted { lhs, rhs in
             memoryTitle(for: lhs) < memoryTitle(for: rhs)
         }.map { id in
@@ -2574,15 +2604,23 @@ final class AuditLogViewModel {
 
     func rows(memoryFilter: Memory.ID?) -> [Activity] {
         all.filter { a in
-            (actorFilter == nil || a.actorID == actorFilter)
-                && (memoryFilter == nil || a.memoryID == memoryFilter)
+            guard actorFilter == nil || a.actorID == actorFilter else { return false }
+            guard let memoryFilter else { return true }
+            // A row matches the memory filter if it names the memory directly
+            // (write/block) or a read touched it (join link).
+            return a.memoryID == memoryFilter
+                || memoryLinks[a.id]?.contains(memoryFilter) == true
         }
     }
 
+    // Classification logic lives in LocalmemCore (OperationCategory) so it can be
+    // unit-tested headlessly; this maps the core bucket to the UI-facing Category
+    // (which also carries the `.all` filter case and display labels).
     nonisolated static func category(of op: String) -> Category {
-        switch op {
-        case "memory_search", "memory_recent": return .reads
-        default: return op.hasPrefix("access_") ? .access : .writes
+        switch OperationCategory.classify(op) {
+        case .reads:  return .reads
+        case .writes: return .writes
+        case .access: return .access
         }
     }
 }
@@ -2698,7 +2736,7 @@ struct AuditRow: View {
                 .frame(width: 76, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    SourceDot(source: event.actorID, size: 7)
+                    SourceIcon(source: event.actorID, size: 14)
                     Text(event.actorID ?? "—").fontWeight(.semibold)
                     actionView
                     if let q = event.query, !q.isEmpty {

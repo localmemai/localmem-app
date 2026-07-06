@@ -91,6 +91,33 @@ struct ToolRegistryTests {
         #expect(rows.allSatisfy { $0.actorID == "test-client" })
     }
 
+    @Test("a search records which memories it touched, so reads are attributable")
+    func searchRecordsMemoryLinks() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let database = try LocalmemDatabase(url: tmp)
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+        let identity = MCPClientIdentity(fallback: "test-client")
+        let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
+
+        let memory = try await store.add(
+            content: "attributable searchable memory", type: .note,
+            actorKind: .cli, actorID: "user")
+
+        _ = try await registry.call(
+            name: "memory_search", arguments: ["query": .string("attributable")])
+
+        let rows = try await activityStore.recent(limit: 10)
+        let search = try #require(rows.first { $0.operation == "memory_search" })
+        // The read carries no single memoryID...
+        #expect(search.memoryID == nil)
+        // ...but the join links it to the memory it returned.
+        let links = try await activityStore.memoryLinks(activityIDs: [search.id])
+        #expect(links[search.id]?.contains(memory.id) == true)
+    }
+
     @Test("call routes memory_recent and returns newest-first JSON")
     func callRoutesRecent() async throws {
         let (registry, tmp) = try makeRegistry()
@@ -396,10 +423,15 @@ struct ToolRegistryTests {
         ).content.firstText
         #expect(search.contains("visible searchable"))
         #expect(!search.contains("hidden searchable"))
+        // The envelope must clearly signal the withheld result, not silently
+        // return a short list.
+        #expect(search.contains("accessNote"))
+        #expect(search.contains("withheld"))
 
         let recent = try await registry.call(name: "memory_recent", arguments: nil).content.firstText
         #expect(recent.contains("visible searchable"))
         #expect(!recent.contains("hidden searchable"))
+        #expect(recent.contains("accessNote"))
 
         let rows = try await activityStore.recent(limit: 10)
         let filtered = rows.filter { $0.operation == "access_filtered" }
@@ -427,7 +459,8 @@ struct ToolRegistryTests {
             actorID: "user"
         )
 
-        await #expect(throws: MCPError.self) {
+        // The error must say access is blocked, not the misleading "no memory".
+        let error = await #expect(throws: MCPError.self) {
             _ = try await registry.call(
                 name: "memory_update",
                 arguments: [
@@ -436,6 +469,7 @@ struct ToolRegistryTests {
                 ]
             )
         }
+        #expect(String(describing: error).lowercased().contains("blocked"))
         let admin = try await store.get(id: memory.id)
         #expect(admin?.content == "do not edit")
 
