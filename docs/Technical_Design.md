@@ -519,7 +519,7 @@ registration.
 ### Website & release pipeline
 
 The marketing site lives in its own repo,
-[`localmem-ai/localmem-web`](https://github.com/localmem-ai/localmem-web) (a
+[`localmemai/localmem-web`](https://github.com/localmemai/localmem-web) (a
 single static `index.html`, deployed on Vercel) — it is no longer vendored in
 this repo. The site serves the download button (DMG), the install command,
 `install.sh`, the Sparkle appcast, the release artifacts, and docs. This implies a CI release
