@@ -681,6 +681,7 @@ private struct WizardRunScreen: View {
                     if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
                 }
                 CLIToolCard()
+                TryItPromptCard()
             }
             Spacer(minLength: 0)
         }
@@ -766,6 +767,47 @@ private struct CLIToolCard: View {
             status = CLIToolInstaller.status()
             busy = false
         }
+    }
+}
+
+/// Closing nudge: a copyable first message the user can paste to their agent.
+/// Sending it makes the agent invoke a Localmem tool, which surfaces the client's
+/// own approval prompt — we deliberately leave that approval to the user rather
+/// than pre-silencing it, so they see and consent to the first access.
+private struct TryItPromptCard: View {
+    private let prompt = "From now on, use your Localmem memory tools to store and recall my facts and preferences. To start: remember that I take my coffee as a flat white."
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.bubble").foregroundStyle(.tint)
+                Text("Try it in your agent").fontWeight(.semibold)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+                } label: {
+                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
+            Text(prompt)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Your agent will ask to approve the Localmem tool the first time — that prompt is expected; approve it to grant access.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

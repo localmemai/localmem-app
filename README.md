@@ -54,8 +54,9 @@ search, permissions, and audit behavior:
 - **Audit log.** Every read, search, and write is attributed to the agent that
   made it and recorded so you can see what was accessed.
 - **One-command setup.** `localmem setup` registers the MCP server with every
-  installed client and pre-authorizes its tools so agents don't prompt on every
-  call.
+  installed client. Your client asks you to approve Localmem's tools the first
+  time an agent uses them — approve it once. (Pass `--preauthorize` to skip that
+  prompt if you'd rather auto-approve.)
 
 ### MCP tools
 

@@ -206,11 +206,16 @@ enum AgentConfigurationInspector {
             return FileManager.default.fileExists(atPath: "/Applications/Claude.app")
                 || configURL.map { FileManager.default.fileExists(atPath: $0.path) } == true
         case "cursor":
-            return FileManager.default.fileExists(atPath: home.appendingPathComponent(".cursor").path)
+            // The bare `~/.cursor` dir is created by too many things to be a
+            // reliable signal. Require the actual app or a real MCP config file.
+            return FileManager.default.fileExists(atPath: "/Applications/Cursor.app")
+                || FileManager.default.fileExists(atPath: home.appendingPathComponent("Applications/Cursor.app").path)
+                || FileManager.default.fileExists(atPath: home.appendingPathComponent(".cursor/mcp.json").path)
         case "codex":
-            return FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex").path)
+            return FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex/config.toml").path)
         case "antigravity-client":
-            return FileManager.default.fileExists(atPath: home.appendingPathComponent(".gemini").path)
+            return FileManager.default.fileExists(atPath: "/Applications/Antigravity.app")
+                || FileManager.default.fileExists(atPath: home.appendingPathComponent(".gemini/config/mcp_config.json").path)
         case "claude-code":
             return FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude").path)
                 || FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude.json").path)
@@ -617,11 +622,30 @@ struct ContentView: View {
         }
         .task(id: query) { await memoryVM?.search(query) }
         .task {
-            // Status bar polling — auto-cancels on view disappear.
+            // Status + memory-list polling — auto-cancels on view disappear.
+            // Memories are also written by the separate localmem-mcp process when
+            // an agent stores one, so the list must pick up out-of-process changes
+            // without an app restart. Re-run the current search whenever the total
+            // memory count changes (a new agent write), which the status refresh
+            // already computes — cheap, and avoids clobbering the list every tick.
             guard let statusVM else { return }
+            var lastCount = -1
             while !Task.isCancelled {
                 await statusVM.refresh()
+                if statusVM.memoryCount != lastCount {
+                    if lastCount != -1 { await memoryVM?.search(query) }
+                    lastCount = statusVM.memoryCount
+                }
                 try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        // Returning to the app after an agent session is the common case; refresh
+        // immediately on focus rather than waiting for the next poll tick. Also
+        // catches in-place edits an agent made (which don't change the count).
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task {
+                await memoryVM?.search(query)
+                await statusVM?.refresh()
             }
         }
         .sheet(isPresented: $showSetupWizard) {

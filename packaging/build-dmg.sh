@@ -106,7 +106,18 @@ if [ -n "$SIGN_IDENTITY" ]; then
 		--sign "$SIGN_IDENTITY" "$APP"
 	codesign --verify --deep --strict --verbose=2 "$APP"
 else
-	log "WARNING: SIGN_IDENTITY not set — producing an UNSIGNED bundle (local testing only)."
+	# No Developer ID: ad-hoc sign so the bundle is internally valid and launches
+	# on Apple Silicon after the user clears quarantine. This is NOT notarized and
+	# still trips Gatekeeper on download — see the "unsigned pre-release" note.
+	log "WARNING: SIGN_IDENTITY not set — ad-hoc signing an UNSIGNED (un-notarized) bundle."
+	log "         Downloaders must bypass Gatekeeper manually. Not for a public download button."
+	for b in "${RESOURCE_BUNDLES[@]}"; do
+		[ -e "$MACOS_DIR/$b" ] && codesign --force --sign - "$MACOS_DIR/$b"
+	done
+	for bin in localmem localmem-mcp localmem-app; do
+		codesign --force --sign - "$MACOS_DIR/$bin"
+	done
+	codesign --force --sign - "$APP"
 fi
 
 # ---- 4. build the DMG ------------------------------------------------------
