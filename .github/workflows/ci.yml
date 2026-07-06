@@ -17,7 +17,7 @@ jobs:
     # Xcode 26 (Swift 6.2).
     runs-on: macos-26
     # Safety net: a stuck test should fail fast, not burn hours.
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -42,5 +42,14 @@ jobs:
       - name: Build
         run: swift build --build-tests
 
-      - name: Test
-        run: swift test --skip-build
+      # Run each suite as its own step so a headless hang pinpoints the culprit
+      # (the spinning step) instead of a single opaque "Test". Dropping
+      # --skip-build also rules out the skip-build planning path as the cause.
+      - name: Test — Core
+        run: swift test --filter LocalmemCoreTests
+
+      - name: Test — MCP
+        run: swift test --filter LocalmemMCPTests
+
+      - name: Test — CLI
+        run: swift test --filter LocalmemTests
