@@ -8,7 +8,7 @@ we take security reports seriously.
 **Please do not open a public issue for security vulnerabilities.**
 
 Report privately through GitHub's
-[private vulnerability reporting](https://github.com/localmem-ai/localmem-app/security/advisories/new)
+[private vulnerability reporting](https://github.com/localmemai/localmem-app/security/advisories/new)
 ("Report a vulnerability" under the repository's **Security** tab). We aim to
 acknowledge reports within a few days and will keep you updated on remediation.
 
