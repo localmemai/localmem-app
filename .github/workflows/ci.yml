@@ -51,5 +51,9 @@ jobs:
       - name: Test — MCP
         run: swift test --filter LocalmemMCPTests
 
+      # Serial so the ordered log pinpoints any hanging test, with a short
+      # step timeout so a hang fails in minutes. (This suite passes in ~1s
+      # locally under every stdin condition, so the hang is CI-specific.)
       - name: Test — CLI
-        run: swift test --filter LocalmemTests
+        timeout-minutes: 6
+        run: swift test --filter LocalmemTests --no-parallel
