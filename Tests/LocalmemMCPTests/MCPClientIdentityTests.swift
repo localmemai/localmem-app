@@ -31,6 +31,16 @@ struct MCPClientIdentityTests {
         #expect(await identity.name == "antigravity-client")
     }
 
+    @Test("Claude Desktop's 'claude-ai' clientInfo folds into claude-desktop")
+    func normalizesClaudeAiToDesktop() async {
+        let identity = MCPClientIdentity(fallback: "fallback")
+        await identity.set("claude-ai")
+        #expect(await identity.name == "claude-desktop")
+
+        await identity.set("Claude.ai")
+        #expect(await identity.name == "claude-desktop")
+    }
+
     @Test("set is a no-op for nil and empty strings — fallback remains in effect")
     func setIgnoresNilAndEmpty() async {
         let identity = MCPClientIdentity(fallback: "fallback")

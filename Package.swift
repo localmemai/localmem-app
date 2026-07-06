@@ -46,7 +46,12 @@ let package = Package(
         .executableTarget(
             name: "localmem-app",
             dependencies: ["LocalmemCore"],
-            path: "Sources/localmem-app"
+            path: "Sources/localmem-app",
+            resources: [
+                // Agent brand marks, loaded via Bundle.module by AgentIcon.
+                // `.copy` preserves the folder verbatim for a predictable lookup.
+                .copy("Resources/AgentIcons"),
+            ]
         ),
         .testTarget(
             name: "LocalmemCoreTests",
@@ -68,9 +73,9 @@ let package = Package(
                 .product(name: "TOMLKit", package: "TOMLKit"),
             ]
         ),
-        .testTarget(
-            name: "LocalmemAppTests",
-            dependencies: ["localmem-app", "LocalmemCore"]
-        ),
+        // Note: there is deliberately no test target for `localmem-app`. Linking
+        // the SwiftUI @main executable into a test bundle hangs on headless CI
+        // (no window server). The app's testable logic lives in LocalmemCore
+        // (e.g. OperationCategory) and is covered by LocalmemCoreTests.
     ]
 )

@@ -29,7 +29,11 @@ actor MCPClientIdentity {
             return "codex"
         case "claude", "claude-code", "claude_code", "claude code":
             return "claude-code"
-        case "claude-desktop", "claude_desktop", "claude desktop":
+        // Claude Desktop identifies itself as "claude-ai" in its MCP clientInfo,
+        // so fold that into the canonical id the rest of the app uses — otherwise
+        // exclusions set for "claude-desktop" wouldn't apply and its audit rows
+        // wouldn't map to the known agent.
+        case "claude-desktop", "claude_desktop", "claude desktop", "claude-ai", "claude.ai", "claude_ai":
             return "claude-desktop"
         case "cursor", "cursor-mcp-client", "cursor mcp client":
             return "cursor"

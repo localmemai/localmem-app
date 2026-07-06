@@ -11,8 +11,11 @@ struct SetupCommand: AsyncParsableCommand {
     @Flag(name: .long, inversion: .prefixedNo, help: "Install agent instruction files (~/.localmem/AGENTS.md and per-agent imports).")
     var instructions: Bool = true
 
-    @Flag(name: .long, inversion: .prefixedNo, help: "Pre-approve Localmem's tools so clients don't prompt on every call.")
-    var preauthorize: Bool = true
+    // Default OFF: the user should consciously approve Localmem's first tool use
+    // in their client's own prompt, rather than us silently pre-approving it.
+    // Opt back in with `--preauthorize` to skip the per-client approval prompts.
+    @Flag(name: .long, inversion: .prefixedNo, help: "Pre-approve Localmem's tools so clients don't prompt on first use (default: off — approve manually).")
+    var preauthorize: Bool = false
 
     func run() async throws {
         let binaryPath = try BinaryLocator.mcpServerPath()

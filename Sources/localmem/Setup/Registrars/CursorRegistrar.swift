@@ -18,12 +18,14 @@ struct CursorRegistrar: ClientRegistrar {
         homeDirectory.appendingPathComponent(".cursor/permissions.json")
     }
 
-    private var cursorDir: URL {
-        homeDirectory.appendingPathComponent(".cursor")
-    }
-
     func isInstalled() -> Bool {
-        FileManager.default.fileExists(atPath: cursorDir.path)
+        // A bare `~/.cursor` directory is created by too many things to be a
+        // reliable signal (setup itself creates it), so it would make Cursor look
+        // installed on machines that never had it. Require the actual app or a
+        // real MCP config file instead.
+        FileManager.default.fileExists(atPath: "/Applications/Cursor.app")
+            || FileManager.default.fileExists(atPath: homeDirectory.appendingPathComponent("Applications/Cursor.app").path)
+            || FileManager.default.fileExists(atPath: configURL.path)
     }
 
     func registerViaConfigFile(binaryPath: String) throws -> RegistrationOutcome {

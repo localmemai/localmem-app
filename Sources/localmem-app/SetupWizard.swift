@@ -164,22 +164,24 @@ final class SetupWizardModel {
         }
     }
 
-    private func isRegistered(_ agentID: String) -> Bool {
-        guard let known = KnownAgents.all.first(where: { $0.id == agentID }) else { return false }
+    /// Current on-disk configuration state for an agent, or nil if it isn't a
+    /// known agent. Shared by the registration/import checks and the diagnostic
+    /// logging in `finalizeConnectRows`.
+    private func configState(_ agentID: String) -> AgentConfigurationState? {
+        guard let known = KnownAgents.all.first(where: { $0.id == agentID }) else { return nil }
         let snapshot = AgentSnapshot(
             id: known.id, displayName: known.displayName, symbol: known.symbol,
             isConnected: false, lastAccess: nil, reads: 0, writes: 0
         )
-        return AgentConfigurationInspector.state(for: snapshot).isRegistered
+        return AgentConfigurationInspector.state(for: snapshot)
+    }
+
+    private func isRegistered(_ agentID: String) -> Bool {
+        configState(agentID)?.isRegistered ?? false
     }
 
     private func hasImport(_ agentID: String) -> Bool {
-        guard let known = KnownAgents.all.first(where: { $0.id == agentID }) else { return false }
-        let snapshot = AgentSnapshot(
-            id: known.id, displayName: known.displayName, symbol: known.symbol,
-            isConnected: false, lastAccess: nil, reads: 0, writes: 0
-        )
-        return AgentConfigurationInspector.state(for: snapshot).hasInstructionImport == true
+        configState(agentID)?.hasInstructionImport == true
     }
 
     // MARK: Touch ID
@@ -285,7 +287,19 @@ final class SetupWizardModel {
 
     private func finalizeConnectRows(_ connect: [WizardAgent], error: String?) async {
         for agent in connect {
-            let registered = isRegistered(agent.id)
+            let state = configState(agent.id)
+            let registered = state?.isRegistered ?? false
+            // Diagnostic: pinpoint why a working registration can still read as
+            // "failed" here — logs the exact file checked and what it resolved.
+            Log.info(.setup, "wizard post-setup registration re-check", [
+                "agent": agent.id,
+                "registered": String(registered),
+                "config_path": state?.configPath ?? "nil",
+                "registered_binary": state?.registeredBinaryPath ?? "nil",
+                "instruction_import": state.map { String(describing: $0.hasInstructionImport) } ?? "nil",
+                "was_connected": String(agent.wasConnected),
+                "setup_error": error ?? "",
+            ])
             let outcome: WizardRunOutcome = registered
                 ? (agent.wasConnected ? .alreadyConnected : .connected)
                 : .failed(error ?? "registration did not complete")
@@ -614,10 +628,8 @@ private struct WizardAgentRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: agent.symbol)
-                .font(.title3)
+            AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 26)
                 .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                .frame(width: 26)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.displayName).fontWeight(.medium)
@@ -681,6 +693,7 @@ private struct WizardRunScreen: View {
                     if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
                 }
                 CLIToolCard()
+                TryItPromptCard()
             }
             Spacer(minLength: 0)
         }
@@ -769,6 +782,47 @@ private struct CLIToolCard: View {
     }
 }
 
+/// Closing nudge: a copyable first message the user can paste to their agent.
+/// Sending it makes the agent invoke a Localmem tool, which surfaces the client's
+/// own approval prompt — we deliberately leave that approval to the user rather
+/// than pre-silencing it, so they see and consent to the first access.
+private struct TryItPromptCard: View {
+    private let prompt = "From now on, use your Localmem memory tools to store and recall my facts and preferences. To start: remember that I take my coffee as a flat white."
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.bubble").foregroundStyle(.tint)
+                Text("Try it in your agent").fontWeight(.semibold)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+                } label: {
+                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
+            Text(prompt)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Your agent will ask to approve the Localmem tool the first time — that prompt is expected; approve it to grant access.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 private struct WizardRunSection: View {
     let title: String
     let rows: [WizardRunRow]
@@ -786,9 +840,10 @@ private struct WizardRunRowView: View {
     let row: WizardRunRow
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: row.symbol)
+            // colorID carries the agent id for agent/per-agent rows; nil for the
+            // canonical instruction row, which falls back to its SF Symbol.
+            AgentIcon(agentID: row.colorID ?? "", symbol: row.symbol, size: 22)
                 .foregroundStyle(SourcePalette.color(for: row.colorID) ?? .gray)
-                .frame(width: 22)
             Text(row.name)
             Spacer()
             switch row.state {
