@@ -72,11 +72,18 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 for bin in "${BINARIES[@]}"; do
 	cp "$BIN_PATH/$bin" "$MACOS_DIR/$bin"
 done
-# Copy every SwiftPM resource bundle next to the binaries so Bundle.module
-# resolves (LocalmemCore's AGENTS.md, GRDB, the app's AgentIcons, …).
+# Copy every SwiftPM resource bundle into BOTH Contents/Resources and
+# Contents/MacOS so `Bundle.module` resolves from either lookup path:
+#   - The GUI app's Bundle.module searches Bundle.main.resourceURL
+#     (Contents/Resources) — a bundle only in MacOS/ makes it fatalError
+#     ("unable to find bundle named …") the moment it's used (e.g. AgentIcon).
+#   - The CLI/MCP binaries historically resolved theirs from MacOS/ (next to the
+#     executable), so keep a copy there too.
+# The bundles are small (icons, AGENTS.md), so the duplication is negligible.
 while IFS= read -r bundle; do
 	[ -n "$bundle" ] || continue
 	name="$(basename "$bundle")"
+	cp -R "$bundle" "$RES_DIR/$name"
 	cp -R "$bundle" "$MACOS_DIR/$name"
 	RESOURCE_BUNDLES+=("$name")
 done < <(find "$BIN_PATH" -maxdepth 1 -name '*.bundle')
