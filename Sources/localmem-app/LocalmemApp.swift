@@ -869,8 +869,16 @@ struct LocalmemMark: View {
     /// The mark rendered to an `NSImage` for use as the Dock/app icon. Lets
     /// dev runs of the bare SwiftPM executable show the brand instead of the
     /// generic tool icon; packaged `.app` builds use `AppIcon.icns`.
+    ///
+    /// macOS Dock/app icons are *not* full-bleed: Apple's icon grid sits the
+    /// rounded-rect body in ~80% of the canvas with transparent margin around
+    /// it. Rendering the mark edge-to-edge makes it look oversized next to every
+    /// other Dock icon, so inset it within a transparent canvas here.
     @MainActor static func dockIcon() -> NSImage? {
-        let renderer = ImageRenderer(content: LocalmemMark(size: 512))
+        let canvas: CGFloat = 512
+        let content = LocalmemMark(size: canvas * 0.80)
+            .frame(width: canvas, height: canvas)
+        let renderer = ImageRenderer(content: content)
         renderer.scale = 2
         return renderer.nsImage
     }
