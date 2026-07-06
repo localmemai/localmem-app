@@ -14,8 +14,23 @@ struct LocalmemApp: App {
         NSApplication.shared.activate()
         // A bare executable has no bundle icon, so the Dock shows a generic
         // tool icon. Render the brand mark and set it explicitly.
-        if let icon = LocalmemMark.dockIcon() {
-            NSApplication.shared.applicationIconImage = icon
+        //
+        // The Dock and the Cmd-Tab switcher both read `applicationIconImage`,
+        // and the switcher draws its selection glow at a fixed inset — so an
+        // icon large enough to look right in the Dock ends up hiding that glow.
+        // Resolve it by giving each surface its own size: the switcher (and the
+        // default) gets the smaller 0.85 inset so the glow shows around it,
+        // while the Dock is overridden via `dockTile.contentView` with a fuller
+        // 0.90 version.
+        if let switcherIcon = LocalmemMark.dockIcon(inset: 0.85) {
+            NSApplication.shared.applicationIconImage = switcherIcon
+        }
+        if let dockIcon = LocalmemMark.dockIcon(inset: 0.90) {
+            let iconView = NSImageView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
+            iconView.image = dockIcon
+            iconView.imageScaling = .scaleProportionallyUpOrDown
+            NSApplication.shared.dockTile.contentView = iconView
+            NSApplication.shared.dockTile.display()
         }
         // Screenshot/testing hook: pin the window appearance regardless of the
         // system setting. `LOCALMEM_APPEARANCE=light|dark`.
@@ -870,13 +885,14 @@ struct LocalmemMark: View {
     /// dev runs of the bare SwiftPM executable show the brand instead of the
     /// generic tool icon; packaged `.app` builds use `AppIcon.icns`.
     ///
-    /// macOS Dock/app icons are *not* full-bleed: Apple's icon grid sits the
-    /// rounded-rect body in ~80% of the canvas with transparent margin around
-    /// it. Rendering the mark edge-to-edge makes it look oversized next to every
-    /// other Dock icon, so inset it within a transparent canvas here.
-    @MainActor static func dockIcon() -> NSImage? {
+    /// The mark rendered to an `NSImage`, inset within a transparent canvas.
+    /// macOS Dock/app icons aren't full-bleed; the `inset` controls how much of
+    /// the tile the mark fills. Callers use a fuller value for the Dock tile and
+    /// a smaller one for `applicationIconImage` so the Cmd-Tab selection glow
+    /// (drawn at a fixed inset) shows around the icon rather than behind it.
+    @MainActor static func dockIcon(inset: CGFloat = 0.85) -> NSImage? {
         let canvas: CGFloat = 512
-        let content = LocalmemMark(size: canvas * 0.80)
+        let content = LocalmemMark(size: canvas * inset)
             .frame(width: canvas, height: canvas)
         let renderer = ImageRenderer(content: content)
         renderer.scale = 2
