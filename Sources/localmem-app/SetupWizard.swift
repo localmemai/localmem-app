@@ -277,7 +277,10 @@ final class SetupWizardModel {
         if !connect.isEmpty {
             rows.append(.init(id: "canonical", name: "~/.localmem/AGENTS.md", symbol: "doc.text",
                               colorID: nil, kind: .instruction))
-            for a in connect {
+            // Only agents with an instruction file (CLAUDE.md / AGENTS.md) get an
+            // import-line row. Claude Desktop is MCP-only, so expecting an import
+            // line for it would wrongly report "Failed — import line missing".
+            for a in connect where AgentConfigurationInspector.supportsInstructions(a.id) {
                 rows.append(.init(id: "imp-\(a.id)", name: a.displayName, symbol: a.symbol,
                                   colorID: a.id, kind: .instruction))
             }
@@ -675,6 +678,9 @@ private struct WizardRunScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // One scroll region for the whole result set — the per-agent rows,
+            // the summary chips, and the cards — so the list isn't squeezed into a
+            // tiny nested scroll by the cards below it on the fixed-height window.
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if !agentRows.isEmpty {
@@ -683,19 +689,19 @@ private struct WizardRunScreen: View {
                     if !instructionRows.isEmpty {
                         WizardRunSection(title: "Instructions", rows: instructionRows)
                     }
-                }
-            }
 
-            if model.runComplete {
-                HStack(spacing: 14) {
-                    summaryChip("\(model.connectedCount) connected", .green)
-                    if model.disconnectedCount > 0 { summaryChip("\(model.disconnectedCount) disconnected", .orange) }
-                    if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
+                    if model.runComplete {
+                        HStack(spacing: 14) {
+                            summaryChip("\(model.connectedCount) connected", .green)
+                            if model.disconnectedCount > 0 { summaryChip("\(model.disconnectedCount) disconnected", .orange) }
+                            if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
+                        }
+                        CLIToolCard()
+                        TryItPromptCard()
+                    }
                 }
-                CLIToolCard()
-                TryItPromptCard()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 0)
         }
         .padding(28)
         .onAppear { model.startRun() }
