@@ -229,6 +229,14 @@ enum AgentConfigurationInspector {
         }
     }
 
+    /// Whether this agent has an instruction file Localmem can inject its import
+    /// line into. Claude Desktop, for example, is MCP-only (no CLAUDE.md-style
+    /// file), so the setup flow must not expect — or flag a failure for — an
+    /// import line it can never add.
+    static func supportsInstructions(_ agentID: String) -> Bool {
+        instructionTarget(for: agentID) != nil
+    }
+
     private static func isInstalled(agentID: String, configURL: URL?, instructionTarget: AgentInstructionTarget?) -> Bool {
         switch agentID {
         case "claude-desktop":
