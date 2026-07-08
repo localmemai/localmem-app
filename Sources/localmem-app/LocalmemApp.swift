@@ -1097,10 +1097,12 @@ struct TopToolbar: View {
                 Button("Export Memories…", action: onExport)
                 Button("Import Memories…", action: onImport)
             } label: {
-                Image(systemName: "tray.and.arrow.up")
+                Label("Import / Export", systemImage: "tray.and.arrow.up")
+                    .labelStyle(.titleAndIcon)
             }
-            .menuIndicator(.hidden)
-            .frame(width: 44)
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .fixedSize()
             .help("Import or export memories")
 
             Button("+ New Memory", action: onNewMemory)
