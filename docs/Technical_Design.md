@@ -158,10 +158,20 @@ with it.
 > new migrations — schema changes go **inside the existing `v1_initial` block**
 > in `Migrations.swift`. Delete the local dev database and it is recreated fresh.
 
-### Export
+### Import / export
 
-User-initiated export to **JSON** or **SQLite** — understandable without
-proprietary tooling.
+User-initiated **JSON** import and export, driven from the top-toolbar
+**Import / Export** menu — primarily for moving a vault between Macs, plus
+plain-text backup understandable without any proprietary tooling.
+
+The codec lives in `LocalmemCore` (`MemoryArchive`) so the CLI can reuse it and
+it is unit-testable without the GUI. Export writes a versioned envelope
+(`schemaVersion`, `exportedAt`, `app`, `memories[]`); each memory round-trips at
+full fidelity — id, fractional-second ISO-8601 timestamps, tags, exclusions, and
+source. Import (`MemoryStore.importMemories`) inserts with `INSERT OR IGNORE`,
+**skipping ids that already exist** so re-importing the same archive is
+idempotent, and reports `imported` / `skipped` counts. Decode rejects malformed
+files and archives from a newer `schemaVersion` with a clear message.
 
 ## 5. Security & privacy model
 
