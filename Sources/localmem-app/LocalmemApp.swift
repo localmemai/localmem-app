@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LocalAuthentication
+import UniformTypeIdentifiers
 import LocalmemCore
 
 @main
@@ -480,6 +481,22 @@ final class MemoryStoreViewModel {
         _ = try await store.delete(id: id, actorKind: .cli, actorID: "user")
         await search("")
     }
+
+    /// Serializes the entire vault into a portable archive blob for Export.
+    func exportArchive() async throws -> Data {
+        let all = try await store.all()
+        return try MemoryArchive.encode(all)
+    }
+
+    /// Parses an exported archive and merges it into the store (skipping ids
+    /// that already exist), then refreshes the visible list.
+    @discardableResult
+    func importArchive(_ data: Data) async throws -> ImportSummary {
+        let memories = try MemoryArchive.decode(data)
+        let summary = try await store.importMemories(memories, actorKind: .cli, actorID: "user")
+        await search("")
+        return summary
+    }
 }
 
 /// Drives the bottom status bar's five segments and the Overview's stats strip
@@ -562,6 +579,7 @@ struct ContentView: View {
     @AppStorage("seenWizard") private var seenWizard = false
     @State private var showSetupWizard = false
     @State private var wizardMode: SetupWizardMode = .firstRun
+    @State private var portabilityAlert: PortabilityAlert?
 
     var body: some View {
         // Two-level layout so the status bar spans the full window width:
@@ -590,6 +608,8 @@ struct ContentView: View {
                         },
                         onNewMemory: { sheet = .newMemory },
                         onLock: { statusVM?.setLocked(true) },
+                        onExport: exportMemories,
+                        onImport: importMemories,
                         searchFocused: $searchFocused
                     )
                     .frame(height: 52)
@@ -722,6 +742,77 @@ struct ContentView: View {
                 AgentDetailsSheet(agent: agent)
             }
         }
+        .alert(item: $portabilityAlert) { alert in
+            Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+        }
+    }
+
+    // MARK: - Import / Export
+
+    /// Prompts for a destination and writes every memory as a portable JSON
+    /// archive. The save panel runs modally before the async encode so the user
+    /// picks a location up front; a write failure surfaces as an alert.
+    private func exportMemories() {
+        guard let memoryVM else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = Self.defaultExportFilename()
+        panel.title = "Export Memories"
+        panel.message = "Save a portable copy of every memory as JSON."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do {
+                let data = try await memoryVM.exportArchive()
+                try data.write(to: url, options: .atomic)
+            } catch {
+                portabilityAlert = PortabilityAlert(
+                    title: "Export Failed",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    /// Prompts for a Localmem JSON export and merges it into the vault, skipping
+    /// memories whose ids already exist. Reports the result (or the parse error)
+    /// as an alert.
+    private func importMemories() {
+        guard let memoryVM else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.title = "Import Memories"
+        panel.message = "Choose a Localmem JSON export to import."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do {
+                let data = try Data(contentsOf: url)
+                let summary = try await memoryVM.importArchive(data)
+                await statusVM?.refresh()
+                portabilityAlert = PortabilityAlert(
+                    title: "Import Complete",
+                    message: Self.importSummaryMessage(summary)
+                )
+            } catch {
+                portabilityAlert = PortabilityAlert(
+                    title: "Import Failed",
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private static func defaultExportFilename() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "localmem-export-\(formatter.string(from: Date())).json"
+    }
+
+    private static func importSummaryMessage(_ summary: ImportSummary) -> String {
+        let added = "\(summary.imported) " + (summary.imported == 1 ? "memory" : "memories")
+        guard summary.skipped > 0 else { return "Imported \(added)." }
+        return "Imported \(added) (\(summary.skipped) duplicate\(summary.skipped == 1 ? "" : "s") skipped)."
     }
 
     /// Hidden buttons that register ⌘1–⌘7 (jump to section) and ⌘F (focus
@@ -955,12 +1046,22 @@ struct NavItem: View {
 
 // MARK: - Top toolbar (Phase 1)
 
+/// A one-off success/failure message for the Import/Export flow, surfaced via
+/// `.alert(item:)`.
+struct PortabilityAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
 struct TopToolbar: View {
     @Binding var query: String
     let sidebarCollapsed: Bool
     let onToggleSidebar: () -> Void
     let onNewMemory: () -> Void
     let onLock: () -> Void
+    let onExport: () -> Void
+    let onImport: () -> Void
     @FocusState.Binding var searchFocused: Bool
 
     /// When the sidebar is collapsed, the toolbar runs all the way to the
@@ -991,6 +1092,17 @@ struct TopToolbar: View {
             }
             .help("Lock the vault")
             .keyboardShortcut("l", modifiers: .command)
+
+            Menu {
+                Button("Export Memories…", action: onExport)
+                Button("Import Memories…", action: onImport)
+            } label: {
+                Image(systemName: "tray.and.arrow.up")
+            }
+            .menuIndicator(.hidden)
+            .frame(width: 44)
+            .help("Import or export memories")
+
             Button("+ New Memory", action: onNewMemory)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut("n", modifiers: .command)
@@ -1168,7 +1280,6 @@ struct OverviewView: View {
 
 enum ComingSoonFeature: String, CaseIterable, Identifiable {
     case syncCompanion
-    case importExport
     case connectors
 
     var id: String { rawValue }
@@ -1176,7 +1287,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .syncCompanion: "iCloud sync + companion app"
-        case .importExport: "Import / Export memories"
         case .connectors: "Connectors"
         }
     }
@@ -1184,7 +1294,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
     var sidebarTitle: String {
         switch self {
         case .syncCompanion: "iCloud + Companion"
-        case .importExport: "Import / Export"
         case .connectors: "Connectors"
         }
     }
@@ -1192,7 +1301,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .syncCompanion: "Private sync across your devices."
-        case .importExport: "Portable memory backup and restore."
         case .connectors: "Apple Notes, Obsidian, Markdown files, and more."
         }
     }
@@ -1200,7 +1308,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .syncCompanion: "icloud.and.arrow.up"
-        case .importExport: "tray.and.arrow.up"
         case .connectors: "point.3.connected.trianglepath.dotted"
         }
     }
@@ -1209,8 +1316,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
         switch self {
         case .syncCompanion:
             return "Sync your Localmem vault through iCloud and capture memories from a lightweight companion app while keeping the human in control of approval and access."
-        case .importExport:
-            return "Bring memories in from files and export a full-fidelity archive for backup, migration, or inspection outside the app."
         case .connectors:
             return "Connect selected sources like Apple Notes, Obsidian vaults, Markdown folders, and other local files with explicit review before anything becomes memory."
         }
@@ -1270,8 +1375,6 @@ struct FeaturePreviewBullets: View {
         switch feature {
         case .syncCompanion:
             return ["iCloud-backed device sync", "Companion capture flow", "Approval-first privacy controls"]
-        case .importExport:
-            return ["Full-fidelity archive export", "Portable import path", "Backup and migration support"]
         case .connectors:
             return ["Apple Notes ingestion", "Obsidian and Markdown folder support", "Explicit review before memory creation"]
         }

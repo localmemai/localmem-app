@@ -78,6 +78,74 @@ struct MemoryStoreTests {
         #expect(secondDelete == false)
     }
 
+    @Test func allReturnsEveryMemoryNewestFirst() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "first", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "second", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "third", type: .note, actorKind: .cli, actorID: "user")
+
+        let all = try await store.all()
+        #expect(all.count == 3)
+        #expect(all.first?.content == "third")
+        #expect(all.last?.content == "first")
+    }
+
+    @Test func importPreservesFieldsAndSkipsDuplicates() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // A memory that already lives in the target store.
+        let existing = try await store.add(content: "already here", type: .note, actorKind: .cli, actorID: "user")
+
+        // An archive carrying the existing memory plus one brand-new one, each
+        // with its own id/timestamps/tags to prove full-fidelity transfer.
+        let incoming = Memory(
+            type: .preference,
+            title: "Editor",
+            content: "Uses Cursor.",
+            tags: ["editor", "tools"],
+            excludedAgents: ["blocked-agent"],
+            source: "other-machine",
+            createdAt: Date(timeIntervalSince1970: 1_000_000),
+            updatedAt: Date(timeIntervalSince1970: 2_000_000)
+        )
+        let duplicate = Memory(
+            id: existing.id,
+            type: .note,
+            content: "conflicting content that must NOT overwrite",
+            source: "other-machine"
+        )
+
+        let summary = try await store.importMemories([incoming, duplicate], actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 1)
+        #expect(summary.skipped == 1)
+
+        // The new memory landed with every field intact.
+        let fetched = try #require(try await store.get(id: incoming.id))
+        #expect(fetched.title == "Editor")
+        #expect(fetched.content == "Uses Cursor.")
+        #expect(Set(fetched.tags) == ["editor", "tools"])
+        #expect(fetched.excludedAgents == ["blocked-agent"])
+        #expect(fetched.source == "other-machine")
+        #expect(fetched.createdAt == incoming.createdAt)
+
+        // The duplicate id was left untouched, not clobbered.
+        let untouched = try #require(try await store.get(id: existing.id))
+        #expect(untouched.content == "already here")
+    }
+
+    @Test func importOfEmptyArchiveIsNoOp() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let summary = try await store.importMemories([], actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 0)
+        #expect(summary.skipped == 0)
+        #expect(try await store.count() == 0)
+    }
+
     @Test func sourceMirrorsActorID() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }

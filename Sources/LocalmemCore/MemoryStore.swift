@@ -76,6 +76,63 @@ public actor MemoryStore {
         return memory
     }
 
+    /// Bulk-inserts memories from an exported archive, preserving each row's
+    /// original id, timestamps, tags, exclusions, and source for full-fidelity
+    /// transfer between machines. Existing ids are skipped (never overwritten),
+    /// so re-importing the same archive is idempotent. A single `memory_import`
+    /// activity records the batch, tagged with the number actually added.
+    @discardableResult
+    public func importMemories(
+        _ memories: [Memory],
+        actorKind: ActorKind,
+        actorID: String? = nil
+    ) async throws -> ImportSummary {
+        guard !memories.isEmpty else { return ImportSummary(imported: 0, skipped: 0) }
+        return try await database.write { db in
+            var imported = 0
+            for memory in memories {
+                try db.execute(
+                    sql: """
+                        INSERT OR IGNORE INTO memories (id, type, title, content, source, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                    arguments: [
+                        memory.id.uuidString,
+                        memory.type.rawValue,
+                        memory.title,
+                        Data(memory.content.utf8),
+                        memory.source,
+                        DateFormat.iso8601.string(from: memory.createdAt),
+                        DateFormat.iso8601.string(from: memory.updatedAt),
+                    ]
+                )
+                // A pre-existing id is a no-op INSERT; only wire up the child
+                // rows for memories we actually added so we never touch an
+                // existing memory's tags or exclusions.
+                guard db.changesCount > 0 else { continue }
+                imported += 1
+                for tag in memory.tags {
+                    try db.execute(
+                        sql: "INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)",
+                        arguments: [memory.id.uuidString, tag]
+                    )
+                }
+                try Self.replaceExclusions(
+                    memoryID: memory.id.uuidString,
+                    agents: Self.normalizedAgents(memory.excludedAgents),
+                    in: db
+                )
+            }
+            try ActivityStore.add(Activity(
+                actorKind: actorKind,
+                actorID: actorID,
+                operation: "memory_import",
+                resultCount: imported
+            ), in: db)
+            return ImportSummary(imported: imported, skipped: memories.count - imported)
+        }
+    }
+
     /// Replaces an existing memory's mutable fields. Source and createdAt are
     /// preserved — those track provenance, not the latest edit. Tags are
     /// fully replaced (not diffed) inside the same transaction. The
@@ -247,6 +304,18 @@ public actor MemoryStore {
                     arguments: [limit]
                 )
             }
+            return try Self.attachMetadata(rows: rows, in: db)
+        }
+    }
+
+    /// Every memory, newest first — the admin/export view (no agent read
+    /// filter). Used by the app's Export feature to serialize the whole vault.
+    public func all() async throws -> [Memory] {
+        try await database.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM memories ORDER BY created_at DESC, rowid DESC"
+            )
             return try Self.attachMetadata(rows: rows, in: db)
         }
     }
