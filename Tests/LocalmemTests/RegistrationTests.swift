@@ -210,6 +210,33 @@ struct RegistrationTests {
             #expect(r.isRegistered() == false)
             #expect(r.registeredBinaryPath() == nil)
         }
+
+        @Test("isInstalled is true when a real mcp config file exists")
+        func isInstalledWithConfig() throws {
+            let home = RegistrationTests.makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            let cursorDir = home.appendingPathComponent(".cursor")
+            try FileManager.default.createDirectory(at: cursorDir, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: cursorDir.appendingPathComponent("mcp.json"))
+
+            #expect(CursorRegistrar(homeDirectory: home).isInstalled())
+        }
+
+        @Test("isInstalled ignores a bare ~/.cursor dir with no app or config")
+        func isInstalledIgnoresBareDir() throws {
+            let home = RegistrationTests.makeHome()
+            defer { try? FileManager.default.removeItem(at: home) }
+            // A lone ~/.cursor directory (created by all sorts of things, incl.
+            // setup itself) must NOT make Cursor look installed — the phantom
+            // Cursor regression.
+            try FileManager.default.createDirectory(
+                at: home.appendingPathComponent(".cursor"), withIntermediateDirectories: true)
+
+            // Only meaningful when Cursor.app isn't actually present on this host.
+            if !FileManager.default.fileExists(atPath: "/Applications/Cursor.app") {
+                #expect(CursorRegistrar(homeDirectory: home).isInstalled() == false)
+            }
+        }
     }
 
     // MARK: - Codex (TOML)

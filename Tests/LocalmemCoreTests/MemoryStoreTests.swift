@@ -78,6 +78,136 @@ struct MemoryStoreTests {
         #expect(secondDelete == false)
     }
 
+    @Test func allReturnsEveryMemoryNewestFirst() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = try await store.add(content: "first", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "second", type: .note, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "third", type: .note, actorKind: .cli, actorID: "user")
+
+        let all = try await store.all()
+        #expect(all.count == 3)
+        #expect(all.first?.content == "third")
+        #expect(all.last?.content == "first")
+    }
+
+    @Test func importPreservesFieldsAndSkipsDuplicates() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // A memory that already lives in the target store.
+        let existing = try await store.add(content: "already here", type: .note, actorKind: .cli, actorID: "user")
+
+        // An archive carrying the existing memory plus one brand-new one, each
+        // with its own id/timestamps/tags to prove full-fidelity transfer.
+        let incoming = Memory(
+            type: .preference,
+            title: "Editor",
+            content: "Uses Cursor.",
+            tags: ["editor", "tools"],
+            excludedAgents: ["blocked-agent"],
+            source: "other-machine",
+            createdAt: Date(timeIntervalSince1970: 1_000_000),
+            updatedAt: Date(timeIntervalSince1970: 2_000_000)
+        )
+        let duplicate = Memory(
+            id: existing.id,
+            type: .note,
+            content: "conflicting content that must NOT overwrite",
+            source: "other-machine"
+        )
+
+        let summary = try await store.importMemories([incoming, duplicate], actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 1)
+        #expect(summary.skipped == 1)
+
+        // The new memory landed with every field intact.
+        let fetched = try #require(try await store.get(id: incoming.id))
+        #expect(fetched.title == "Editor")
+        #expect(fetched.content == "Uses Cursor.")
+        #expect(Set(fetched.tags) == ["editor", "tools"])
+        #expect(fetched.excludedAgents == ["blocked-agent"])
+        #expect(fetched.source == "other-machine")
+        #expect(fetched.createdAt == incoming.createdAt)
+
+        // The duplicate id was left untouched, not clobbered.
+        let untouched = try #require(try await store.get(id: existing.id))
+        #expect(untouched.content == "already here")
+    }
+
+    @Test func importOfEmptyArchiveIsNoOp() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let summary = try await store.importMemories([], actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 0)
+        #expect(summary.skipped == 0)
+        #expect(try await store.count() == 0)
+    }
+
+    /// Full transfer-between-machines flow: populate one vault, export it to a
+    /// JSON file on disk, then import that file into a fresh, empty vault and
+    /// assert every memory survived byte-for-byte. Mirrors exactly what the
+    /// app's `exportArchive()` / `importArchive()` do (`all()` → encode → file →
+    /// decode → `importMemories`), so this guards the whole feature end to end.
+    @Test func exportToFileThenImportReproducesVaultExactly() async throws {
+        let (source, sourceURL) = try makeStore()
+        let (destination, destURL) = try makeStore()
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("localmem-export-\(UUID().uuidString).json")
+        defer {
+            try? FileManager.default.removeItem(at: sourceURL)
+            try? FileManager.default.removeItem(at: destURL)
+            try? FileManager.default.removeItem(at: file)
+        }
+
+        // A vault with the full spread of fields: tags, per-agent exclusions,
+        // every memory type, an untitled note, and multi-byte content.
+        _ = try await source.add(
+            content: "Prefers flat white with oat milk. ☕️",
+            type: .preference,
+            title: "Coffee",
+            tags: ["coffee", "drink"],
+            excludedAgents: ["nosy-agent"],
+            actorKind: .cli,
+            actorID: "user"
+        )
+        _ = try await source.add(
+            content: "Ship the import/export feature.",
+            type: .project,
+            title: "Q3 goal",
+            tags: ["work"],
+            actorKind: .cli,
+            actorID: "user"
+        )
+        _ = try await source.add(content: "A plain untitled note", type: .note, actorKind: .cli, actorID: "user")
+
+        // Export → bytes on disk → read back (the "carry the file to another Mac" hop).
+        let exported = try MemoryArchive.encode(try await source.all())
+        try exported.write(to: file, options: .atomic)
+        let reloaded = try Data(contentsOf: file)
+        let decoded = try MemoryArchive.decode(reloaded)
+
+        // Import into the empty destination vault.
+        let summary = try await destination.importMemories(decoded, actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 3)
+        #expect(summary.skipped == 0)
+
+        // The destination is now an exact replica of the source: same ids,
+        // fields, tags, exclusions, and (fractional-second) timestamps. Memory's
+        // Equatable + the store's stable ordering make this a strict check.
+        let original = try await source.all()
+        let restored = try await destination.all()
+        #expect(restored == original)
+
+        // Re-importing the same file is idempotent — nothing duplicated.
+        let second = try await destination.importMemories(decoded, actorKind: .cli, actorID: "user")
+        #expect(second.imported == 0)
+        #expect(second.skipped == 3)
+        #expect(try await destination.count() == 3)
+    }
+
     @Test func sourceMirrorsActorID() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
