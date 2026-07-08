@@ -73,6 +73,43 @@ struct ActivityStoreTests {
         #expect(saved.resultCount == 7)
     }
 
+    /// `add(_:memoryIDs:)` records which memories a read touched, and
+    /// `memoryLinks` reads them back — the join that lets per-memory audit
+    /// filtering attribute reads. Duplicate ids are de-duped by the set insert.
+    @Test func addWithMemoryIDsRecordsLinks() async throws {
+        let (_, activityStore, url) = try makeStores()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let m1 = UUID(), m2 = UUID()
+        let activity = Activity(actorKind: .mcp, actorID: "cursor", operation: "memory_search")
+        try await activityStore.add(activity, memoryIDs: [m1, m2, m1])
+
+        let links = try await activityStore.memoryLinks(activityIDs: [activity.id])
+        #expect(links[activity.id] == [m1, m2])
+    }
+
+    /// A plain `add(_:)` (a write, or a read that returned nothing) records no
+    /// links, so `memoryLinks` returns no entry for it.
+    @Test func plainAddRecordsNoMemoryLinks() async throws {
+        let (_, activityStore, url) = try makeStores()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let activity = Activity(actorKind: .mcp, actorID: "codex", operation: "memory_recent")
+        try await activityStore.add(activity)
+
+        let links = try await activityStore.memoryLinks(activityIDs: [activity.id])
+        #expect(links[activity.id] == nil)
+    }
+
+    /// `memoryLinks` short-circuits on an empty id list without touching the db.
+    @Test func memoryLinksEmptyInputReturnsEmpty() async throws {
+        let (_, activityStore, url) = try makeStores()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let links = try await activityStore.memoryLinks(activityIDs: [])
+        #expect(links.isEmpty)
+    }
+
     /// `recent(limit:)` clamps a non-positive limit to 1 so callers can't ask
     /// SQLite for `LIMIT 0` (which would silently swallow rows) or a negative
     /// value.
