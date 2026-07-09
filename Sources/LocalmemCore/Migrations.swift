@@ -125,6 +125,50 @@ enum Migrations {
             try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_activity_memory_memory ON activity_memory(memory_id)")
         }
 
+        // File connector: sources the user imports from, per-file processing
+        // state (for change detection), and which memories came from which file
+        // (for replace-all reconciliation). See docs/File_Connector_Design.md.
+        migrator.registerMigration("v3_sources") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS sources (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    connector TEXT NOT NULL DEFAULT 'files',
+                    kind TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    bookmark BLOB,
+                    backend TEXT NOT NULL,
+                    auto_process INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    last_run_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS source_files (
+                    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                    rel_path TEXT NOT NULL,
+                    content_sha256 TEXT,
+                    modified_at TEXT,
+                    processed_at TEXT,
+                    status TEXT NOT NULL,
+                    reason_code TEXT,
+                    error TEXT,
+                    PRIMARY KEY (source_id, rel_path)
+                )
+                """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS source_memories (
+                    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                    source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                    rel_path TEXT NOT NULL,
+                    PRIMARY KEY (memory_id)
+                )
+                """)
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_source_memories_file ON source_memories(source_id, rel_path)")
+        }
+
         return migrator
     }
 }
