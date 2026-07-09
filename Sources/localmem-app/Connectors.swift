@@ -37,9 +37,15 @@ private let connectorCatalog: [ConnectorType] = [
 struct ConnectorsCatalogView: View {
     @State private var vm: ConnectorsViewModel? = try? ConnectorsViewModel()
     @State private var showWizard = false
-    @State private var landingSource: ImportSource?
+    @State private var showManage = false
 
     private let columns = [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: 16, alignment: .top)]
+
+    private var filesSourceCount: Int { vm?.sources.count ?? 0 }
+    private var filesFactCount: Int {
+        guard let vm else { return 0 }
+        return vm.sources.reduce(0) { $0 + (vm.stats[$1.id]?.factCount ?? 0) }
+    }
 
     var body: some View {
         ScrollView {
@@ -51,15 +57,16 @@ struct ConnectorsCatalogView: View {
 
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
                     ForEach(connectorCatalog) { connector in
-                        ConnectorCard(connector: connector) { showWizard = true }
-                    }
-                }
-
-                if let vm, !vm.sources.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Connected sources").font(.headline)
-                        ForEach(vm.sources) { source in
-                            ConnectedSourceRow(vm: vm, source: source) { landingSource = source }
+                        if connector.id == "files" {
+                            ConnectorCard(
+                                connector: connector,
+                                sourceCount: filesSourceCount,
+                                factCount: filesFactCount,
+                                onConnect: { showWizard = true },
+                                onManage: { showManage = true }
+                            )
+                        } else {
+                            ConnectorCard(connector: connector, onConnect: { showWizard = true })
                         }
                     }
                 }
@@ -71,17 +78,21 @@ struct ConnectorsCatalogView: View {
         .sheet(isPresented: $showWizard) {
             if let vm { ConnectorWizardView(vm: vm) }
         }
-        .sheet(item: $landingSource) { source in
-            if let vm { SourceLandingView(vm: vm, source: source) }
+        .sheet(isPresented: $showManage) {
+            if let vm { ConnectorManageView(vm: vm) }
         }
     }
 }
 
 private struct ConnectorCard: View {
     let connector: ConnectorType
+    var sourceCount: Int = 0
+    var factCount: Int = 0
     let onConnect: () -> Void
+    var onManage: () -> Void = {}
 
     private var available: Bool { connector.status == .available }
+    private var connected: Bool { available && sourceCount > 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -118,7 +129,16 @@ private struct ConnectorCard: View {
                 }
             }
 
-            if available {
+            if connected {
+                Text("^[\(sourceCount) source](inflect: true) · \(factCount) facts")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button(action: onConnect) { Label("Import…", systemImage: "plus") }
+                        .buttonStyle(.borderedProminent)
+                    Button(action: onManage) { Label("Manage", systemImage: "slider.horizontal.3") }
+                        .buttonStyle(.bordered)
+                }
+            } else if available {
                 Button(action: onConnect) {
                     Label("Connect…", systemImage: "plus")
                 }

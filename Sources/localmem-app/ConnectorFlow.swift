@@ -253,6 +253,53 @@ struct ConnectedSourceRow: View {
     }
 }
 
+// MARK: - Manage (sources of one connector)
+
+struct ConnectorManageView: View {
+    let vm: ConnectorsViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var landingSource: ImportSource?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Image(systemName: "folder")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40, height: 40)
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Files & Folders").font(.title3.weight(.semibold))
+                    Text("^[\(vm.sources.count) connected source](inflect: true)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            Divider()
+            if vm.sources.isEmpty {
+                Text("No sources connected yet.")
+                    .foregroundStyle(.secondary).font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(vm.sources) { source in
+                            ConnectedSourceRow(vm: vm, source: source) { landingSource = source }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 560, height: 440)
+        .task { await vm.refresh() }
+        .sheet(item: $landingSource) { source in
+            SourceLandingView(vm: vm, source: source)
+        }
+    }
+}
+
 // MARK: - Landing page
 
 struct SourceLandingView: View {
