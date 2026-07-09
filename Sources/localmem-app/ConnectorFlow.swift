@@ -56,6 +56,29 @@ final class ConnectorsViewModel {
         await refresh()
     }
 
+    /// Dry-run: extract proposals for review without writing anything.
+    func preview(_ source: ImportSource, force: Bool) async -> ExtractionPreview {
+        guard !running.contains(source.id) else { return ExtractionPreview() }
+        running.insert(source.id)
+        progress[source.id] = ExtractionProgress(filesTotal: 0, filesDone: 0, factsAdded: 0, currentFile: nil)
+        let extractor = ConnectorBackends.extractor(for: source.backend)
+        let id = source.id
+        let result = await engine.preview(source: source, extractor: extractor, force: force) { p in
+            Task { @MainActor in self.progress[id] = p }
+        }
+        running.remove(source.id)
+        return result
+    }
+
+    /// Persist the user-approved subset of a preview.
+    @discardableResult
+    func commit(_ source: ImportSource, preview: ExtractionPreview, approved: Set<UUID>) async -> ExtractionRunSummary {
+        let summary = await engine.commit(source: source, preview: preview, approvedIDs: approved)
+        lastSummary[source.id] = summary
+        await refresh()
+        return summary
+    }
+
     func remove(_ source: ImportSource, deleteMemories: Bool) async {
         if deleteMemories {
             let ids = (try? await sourceStore.allMemoryIDs(sourceID: source.id)) ?? []
@@ -88,7 +111,9 @@ struct ConnectorWizardView: View {
         case detecting
         case chooseAgent
         case ready(ExtractionBackend)
-        case running
+        case previewing
+        case review
+        case committing
         case done
         case blocked(String)
     }
@@ -96,9 +121,11 @@ struct ConnectorWizardView: View {
     @State private var step: Step = .detecting
     @State private var appleReason = ""
     @State private var agents: [AgentChoice] = []
-    @State private var sourceID: UUID?
+    @State private var source: ImportSource?
+    @State private var preview = ExtractionPreview()
+    @State private var selected: Set<UUID> = []
     @State private var summary: ExtractionRunSummary?
-    @State private var failedFiles: [SourceFileState] = []
+    @State private var committed = false
 
     private struct AgentChoice: Identifiable, Equatable { let id: String; let name: String }
     private static let cliAgents = [("claude-code", "Claude Code"), ("codex", "Codex")]
@@ -107,27 +134,31 @@ struct ConnectorWizardView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text(title).font(.title3.weight(.semibold))
             content
-            if step != .running {
+            if hasFooter {
                 Divider()
-                HStack {
-                    Spacer()
-                    Button(isDone ? "Done" : "Cancel") { dismiss() }
-                        .keyboardShortcut(isDone ? .defaultAction : .cancelAction)
-                }
+                footer
             }
         }
         .padding(24)
-        .frame(width: 480)
+        .frame(width: stepWidth)
         .task { await detect() }
     }
 
-    private var isDone: Bool { if case .done = step { return true }; return false }
+    private var stepWidth: CGFloat {
+        switch step { case .review, .done: return 540; default: return 480 }
+    }
+
+    private var hasFooter: Bool {
+        switch step { case .previewing, .committing: return false; default: return true }
+    }
 
     private var title: String {
         switch step {
-        case .running: return "Importing…"
-        case .done:    return "Import complete"
-        default:       return "Connect a folder or file"
+        case .previewing: return "Reading files…"
+        case .review:     return "Review memories"
+        case .committing: return "Adding memories…"
+        case .done:       return "Import complete"
+        default:          return "Connect a folder or file"
         }
     }
 
@@ -164,16 +195,26 @@ struct ConnectorWizardView: View {
                 } else {
                     row("person.2.fill", "Using \(backendName(backend)) to extract. Files are read by its model.")
                 }
-                Text("Choose a folder or file (Text, Markdown, or PDF).")
+                Text("Choose a folder or file (Text, Markdown, or PDF). You'll review what's found before anything is saved.")
                     .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button { chooseAndRun(backend: backend) } label: {
                     Label("Choose folder or file…", systemImage: "folder.badge.plus")
                 }
                 .buttonStyle(.borderedProminent)
             }
 
-        case .running:
-            runningView
+        case .previewing:
+            progressView
+
+        case .review:
+            reviewView
+
+        case .committing:
+            VStack(alignment: .leading, spacing: 12) {
+                ProgressView().controlSize(.small)
+                Text("Saving \(selected.count) to your vault…").font(.callout).foregroundStyle(.secondary)
+            }
 
         case .done:
             doneView
@@ -183,14 +224,39 @@ struct ConnectorWizardView: View {
         }
     }
 
-    private var runningView: some View {
-        let p = sourceID.flatMap { vm.progress[$0] }
+    // MARK: - Footer
+
+    @ViewBuilder private var footer: some View {
+        switch step {
+        case .review:
+            HStack {
+                Button("Cancel") { cancelBeforeCommit() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(addLabel) { Task { await addApproved() } }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+        case .done:
+            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+        default:
+            HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }
+    }
+
+    private var addLabel: String {
+        selected.isEmpty ? "Finish" : "Add \(selected.count) \(selected.count == 1 ? "memory" : "memories")"
+    }
+
+    // MARK: - Step views
+
+    private var progressView: some View {
+        let p = source.flatMap { vm.progress[$0.id] }
         return VStack(alignment: .leading, spacing: 12) {
             if let p, p.filesTotal > 0 {
                 ProgressView(value: Double(p.filesDone), total: Double(p.filesTotal)) {
-                    Text("Extracting memories…")
+                    Text("Reading & extracting memories…")
                 }
-                Text("\(p.filesDone) of \(p.filesTotal) files · \(p.factsAdded) facts")
+                Text("\(p.filesDone) of \(p.filesTotal) files · \(p.factsAdded) found")
                     .font(.callout).foregroundStyle(.secondary)
                 if let f = p.currentFile {
                     Text(f).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -202,40 +268,44 @@ struct ConnectorWizardView: View {
         }
     }
 
+    private var reviewView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if preview.facts.isEmpty {
+                row("info.circle", "No memories were found in these files.")
+            } else {
+                FactReviewList(facts: preview.facts, selected: $selected)
+            }
+            if !preview.failedFiles.isEmpty || !preview.skippedFiles.isEmpty {
+                outcomeNote
+            }
+        }
+    }
+
+    private var outcomeNote: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(preview.failedFiles, id: \.relPath) { f in
+                Label("\(f.relPath) — \(f.error ?? "couldn't be read")", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.red).lineLimit(2)
+            }
+            if !preview.skippedFiles.isEmpty {
+                Label("^[\(preview.skippedFiles.count) file](inflect: true) skipped (unsupported type or too large).",
+                      systemImage: "minus.circle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
     private var doneView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 14) {
-                chip("\(summary?.filesProcessed ?? 0) files", .green)
-                chip("\(summary?.factsAdded ?? 0) facts", .accentColor)
+                chip("\(summary?.factsAdded ?? 0) memories added", .accentColor)
                 if (summary?.filesSkipped ?? 0) > 0 { chip("\(summary!.filesSkipped) skipped", .orange) }
                 if (summary?.filesFailed ?? 0) > 0 { chip("\(summary!.filesFailed) failed", .red) }
             }
-
-            if !failedFiles.isEmpty {
-                Text("Some files couldn't be processed:").font(.callout.weight(.medium))
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(failedFiles) { file in
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.red).font(.caption)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(file.relPath).font(.caption.weight(.medium))
-                                    if let e = file.error {
-                                        Text(e).font(.caption2).foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 150)
-            } else if (summary?.factsAdded ?? 0) == 0 {
-                row("info.circle", "No memories were found in these files.")
+            if (summary?.factsAdded ?? 0) > 0 {
+                row("checkmark.seal.fill", "Saved to your vault. Manage this source from the Connectors page.")
             } else {
-                row("checkmark.seal.fill", "Added \(summary?.factsAdded ?? 0) memories. Manage this source from the Connectors page.")
+                row("info.circle", "No memories were added.")
             }
         }
     }
@@ -269,21 +339,41 @@ struct ConnectorWizardView: View {
         Task { await runOn(url: url, backend: backend) }
     }
 
+    /// Create the source, dry-run the extraction, and land on the review step.
+    /// Nothing is written to the vault yet — the user approves in `addApproved`.
     private func runOn(url: URL, backend: ExtractionBackend) async {
         let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         let kind: ImportSource.Kind = isDir ? .folder : .file
-        guard let source = await vm.createSource(
+        guard let created = await vm.createSource(
             name: url.lastPathComponent, kind: kind, path: url.path, bookmark: nil, backend: backend)
         else {
             step = .blocked(vm.loadError ?? "Couldn't create the source.")
             return
         }
-        sourceID = source.id
-        step = .running
-        await vm.run(source, force: true)
-        summary = vm.lastSummary[source.id]
-        failedFiles = (await vm.fileStates(source)).filter { $0.status == .failed }
+        source = created
+        step = .previewing
+        let result = await vm.preview(created, force: true)
+        preview = result
+        selected = Set(result.facts.map(\.id))
+        step = .review
+    }
+
+    private func addApproved() async {
+        guard let source else { return }
+        step = .committing
+        summary = await vm.commit(source, preview: preview, approved: selected)
+        committed = true
         step = .done
+    }
+
+    /// Backing out before committing removes the source we speculatively created
+    /// so we don't leave an empty connected source behind.
+    private func cancelBeforeCommit() {
+        if let source, !committed {
+            Task { await vm.remove(source, deleteMemories: true); dismiss() }
+        } else {
+            dismiss()
+        }
     }
 
     private func backendName(_ backend: ExtractionBackend) -> String {
@@ -304,6 +394,208 @@ struct ConnectorWizardView: View {
             Spacer(minLength: 0)
         }
         .font(.callout)
+    }
+}
+
+// MARK: - Memory review
+
+/// A per-file grouped, checkbox list of proposed memories. The caller owns the
+/// `selected` set — unchecked facts are excluded when the source is committed.
+struct FactReviewList: View {
+    let facts: [PreviewFact]
+    @Binding var selected: Set<UUID>
+
+    private var relPaths: [String] {
+        var seen = Set<String>(); var order: [String] = []
+        for f in facts where seen.insert(f.relPath).inserted { order.append(f.relPath) }
+        return order
+    }
+    private var showHeaders: Bool { relPaths.count > 1 }
+    private var allSelected: Bool { !facts.isEmpty && selected.count == facts.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Review what was found").font(.callout.weight(.medium))
+                Spacer()
+                Button(allSelected ? "Deselect all" : "Select all") {
+                    selected = allSelected ? [] : Set(facts.map(\.id))
+                }
+                .buttonStyle(.link).font(.caption)
+            }
+            Text("Uncheck anything that's wrong or you don't want to keep, then add the rest.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(relPaths, id: \.self) { rel in
+                        if showHeaders {
+                            Label(rel, systemImage: "doc")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle).padding(.top, 2)
+                        }
+                        ForEach(facts.filter { $0.relPath == rel }) { fact in row(fact) }
+                    }
+                }
+                .padding(.trailing, 4)
+            }
+            .frame(height: 300)
+        }
+    }
+
+    private func row(_ fact: PreviewFact) -> some View {
+        let isOn = Binding(
+            get: { selected.contains(fact.id) },
+            set: { on in if on { selected.insert(fact.id) } else { selected.remove(fact.id) } })
+        return Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    MemoryTypePill(type: fact.type)
+                    Text(fact.title).font(.callout.weight(.medium))
+                }
+                Text(fact.content).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator, lineWidth: 1))
+    }
+}
+
+/// A small colored capsule naming a memory's type (fact/preference/decision/…).
+struct MemoryTypePill: View {
+    let type: MemoryType
+    var body: some View {
+        Text(type.rawValue.capitalized)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+    private var color: Color {
+        switch type {
+        case .fact:       return .blue
+        case .preference: return .purple
+        case .decision:   return .green
+        case .project:    return .orange
+        case .note:       return .secondary
+        }
+    }
+}
+
+// MARK: - Reprocess review sheet
+
+/// Re-scans an already-connected source and lets the user review the proposed
+/// memories before they replace what's there. Same approve-then-write contract
+/// as the connect wizard.
+struct SourceReviewSheet: View {
+    let vm: ConnectorsViewModel
+    let source: ImportSource
+    var onFinished: () -> Void = {}
+    @Environment(\.dismiss) private var dismiss
+
+    private enum Step { case previewing, review, committing, done }
+    @State private var step: Step = .previewing
+    @State private var preview = ExtractionPreview()
+    @State private var selected: Set<UUID> = []
+    @State private var summary: ExtractionRunSummary?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(titleText).font(.title3.weight(.semibold))
+            content
+            Divider()
+            footer
+        }
+        .padding(24)
+        .frame(width: 540)
+        .task { await load() }
+    }
+
+    private var titleText: String {
+        switch step {
+        case .previewing: return "Reprocessing “\(source.name)”…"
+        case .review:     return "Review changes"
+        case .committing: return "Saving…"
+        case .done:       return "Reprocessed"
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch step {
+        case .previewing:
+            let p = vm.progress[source.id]
+            VStack(alignment: .leading, spacing: 12) {
+                if let p, p.filesTotal > 0 {
+                    ProgressView(value: Double(p.filesDone), total: Double(p.filesTotal)) {
+                        Text("Reading & extracting memories…")
+                    }
+                    Text("\(p.filesDone) of \(p.filesTotal) files · \(p.factsAdded) found")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Reading files…").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        case .review:
+            VStack(alignment: .leading, spacing: 12) {
+                if preview.facts.isEmpty {
+                    Label("No memories were found. Applying will clear this source's existing memories.",
+                          systemImage: "info.circle")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    FactReviewList(facts: preview.facts, selected: $selected)
+                    Text("Applying replaces this source's current memories with the checked ones.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        case .committing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Saving \(selected.count) to your vault…").font(.callout).foregroundStyle(.secondary)
+            }
+        case .done:
+            HStack(spacing: 14) {
+                Text("\(summary?.factsAdded ?? 0) memories").font(.callout.weight(.semibold)).foregroundStyle(Color.accentColor)
+                if (summary?.filesFailed ?? 0) > 0 {
+                    Text("\(summary!.filesFailed) failed").font(.callout.weight(.semibold)).foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var footer: some View {
+        switch step {
+        case .review:
+            HStack {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(selected.isEmpty ? "Apply" : "Apply \(selected.count) \(selected.count == 1 ? "memory" : "memories")") {
+                    Task { await apply() }
+                }
+                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+            }
+        case .done:
+            HStack { Spacer(); Button("Done") { onFinished(); dismiss() }.keyboardShortcut(.defaultAction) }
+        default:
+            HStack { Spacer(); Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }
+    }
+
+    private func load() async {
+        let result = await vm.preview(source, force: true)
+        preview = result
+        selected = Set(result.facts.map(\.id))
+        step = .review
+    }
+
+    private func apply() async {
+        step = .committing
+        summary = await vm.commit(source, preview: preview, approved: selected)
+        step = .done
     }
 }
 
@@ -408,6 +700,7 @@ struct SourceLandingView: View {
 
     @State private var files: [SourceFileState] = []
     @State private var confirmingRemove = false
+    @State private var reprocessing = false
 
     private var stats: SourceStats { vm.stats[source.id] ?? SourceStats() }
     private var isRunning: Bool { vm.running.contains(source.id) }
@@ -457,7 +750,7 @@ struct SourceLandingView: View {
 
             Divider()
             HStack(spacing: 10) {
-                Button { Task { await vm.run(source, force: true); await reload() } } label: {
+                Button { reprocessing = true } label: {
                     Label("Reprocess", systemImage: "arrow.clockwise")
                 }
                 .disabled(isRunning)
@@ -479,6 +772,9 @@ struct SourceLandingView: View {
             Button("Remove & keep memories") { Task { await vm.remove(source, deleteMemories: false); dismiss() } }
             Button("Remove & delete its memories", role: .destructive) { Task { await vm.remove(source, deleteMemories: true); dismiss() } }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $reprocessing) {
+            SourceReviewSheet(vm: vm, source: source, onFinished: { Task { await reload() } })
         }
     }
 

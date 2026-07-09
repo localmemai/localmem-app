@@ -95,6 +95,66 @@ struct ExtractionEngineTests {
         #expect(states.first?.status == .failed)
     }
 
+    @Test("Preview extracts proposals without writing anything")
+    func previewDoesNotWrite() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let dir = try makeFolder(["a.md": "content"])
+        let source = ImportSource(name: "a", kind: .folder, path: dir.path, backend: .apple)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let preview = await engine.preview(
+            source: source,
+            extractor: MockExtractor(facts: [fact("One", "1."), fact("Two", "2.")]),
+            force: true, onProgress: { _ in })
+
+        #expect(preview.facts.count == 2)
+        #expect(try await memoryStore.count() == 0)
+        #expect(try await sourceStore.listFileStates(sourceID: source.id).isEmpty)
+    }
+
+    @Test("Commit stores only the facts the user approved")
+    func commitStoresOnlyApproved() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let dir = try makeFolder(["a.md": "content"])
+        let source = ImportSource(name: "a", kind: .folder, path: dir.path, backend: .apple)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let preview = await engine.preview(
+            source: source,
+            extractor: MockExtractor(facts: [fact("One", "1."), fact("Two", "2."), fact("Three", "3.")]),
+            force: true, onProgress: { _ in })
+        let keep = Set(preview.facts.prefix(2).map(\.id))
+
+        let summary = await engine.commit(source: source, preview: preview, approvedIDs: keep)
+        #expect(summary.factsAdded == 2)
+        #expect(try await memoryStore.count() == 2)
+        #expect(Set(try await memoryStore.all().map(\.content)) == ["1.", "2."])
+    }
+
+    @Test("Re-committing replaces a file's memories with the newly approved set")
+    func commitReplacesOnReprocess() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let dir = try makeFolder(["a.md": "content"])
+        let source = ImportSource(name: "a", kind: .folder, path: dir.path, backend: .apple)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let first = await engine.preview(source: source,
+            extractor: MockExtractor(facts: [fact("A", "A."), fact("B", "B.")]),
+            force: true, onProgress: { _ in })
+        _ = await engine.commit(source: source, preview: first, approvedIDs: Set(first.facts.map(\.id)))
+        #expect(try await memoryStore.count() == 2)
+
+        let second = await engine.preview(source: source,
+            extractor: MockExtractor(facts: [fact("Z", "Z.")]),
+            force: true, onProgress: { _ in })
+        _ = await engine.commit(source: source, preview: second, approvedIDs: Set(second.facts.map(\.id)))
+        #expect(try await memoryStore.count() == 1)
+        #expect(try await memoryStore.all().first?.content == "Z.")
+    }
+
     @Test("Unsupported and oversized files are skipped, not failed")
     func skipsUnsupported() async throws {
         let reader = FileReader()
