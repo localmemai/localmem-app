@@ -54,7 +54,7 @@ struct LocalmemApp: App {
 // MARK: - Sections (Phase 2)
 
 enum AppSection: String, CaseIterable, Hashable {
-    case overview, memories, agents, access, audit
+    case overview, memories, agents, access, audit, connectors
 
     var label: String {
         switch self {
@@ -63,6 +63,7 @@ enum AppSection: String, CaseIterable, Hashable {
         case .agents:     "Agents"
         case .access:     "Access Roster"
         case .audit:      "Audit Log"
+        case .connectors: "Connectors"
         }
     }
 
@@ -73,6 +74,7 @@ enum AppSection: String, CaseIterable, Hashable {
         case .agents:     "person.crop.square"
         case .access:     "lock.shield"
         case .audit:      "list.bullet.rectangle"
+        case .connectors: "point.3.connected.trianglepath.dotted"
         }
     }
 }
@@ -1184,6 +1186,8 @@ struct ContentArea: View {
                     AccessRulesView(statusVM: statusVM)
                 case .audit:
                     AuditLogView(memoryFilter: $auditMemoryFilter, onOpenMemory: onOpenAuditMemory)
+                case .connectors:
+                    ConnectorsCatalogView()
                 }
             }
         }
@@ -1281,36 +1285,33 @@ struct OverviewView: View {
 }
 
 enum ComingSoonFeature: String, CaseIterable, Identifiable {
+    // Connectors graduated from this "Coming Soon" group to its own section
+    // (AppSection.connectors); the catalog page hosts the still-coming sources.
     case syncCompanion
-    case connectors
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .syncCompanion: "iCloud sync + companion app"
-        case .connectors: "Connectors"
         }
     }
 
     var sidebarTitle: String {
         switch self {
         case .syncCompanion: "iCloud + Companion"
-        case .connectors: "Connectors"
         }
     }
 
     var subtitle: String {
         switch self {
         case .syncCompanion: "Private sync across your devices."
-        case .connectors: "Apple Notes, Obsidian, Markdown files, and more."
         }
     }
 
     var symbol: String {
         switch self {
         case .syncCompanion: "icloud.and.arrow.up"
-        case .connectors: "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -1318,8 +1319,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
         switch self {
         case .syncCompanion:
             return "Sync your Localmem vault through iCloud and capture memories from a lightweight companion app while keeping the human in control of approval and access."
-        case .connectors:
-            return "Connect selected sources like Apple Notes, Obsidian vaults, Markdown folders, and other local files with explicit review before anything becomes memory."
         }
     }
 }
@@ -1377,8 +1376,6 @@ struct FeaturePreviewBullets: View {
         switch feature {
         case .syncCompanion:
             return ["iCloud-backed device sync", "Companion capture flow", "Approval-first privacy controls"]
-        case .connectors:
-            return ["Apple Notes ingestion", "Obsidian and Markdown folder support", "Explicit review before memory creation"]
         }
     }
 
