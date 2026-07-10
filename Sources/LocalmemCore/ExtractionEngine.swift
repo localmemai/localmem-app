@@ -151,7 +151,7 @@ public actor ExtractionEngine {
             }
 
             do {
-                var facts = Self.dedup(try await extractor.extract(
+                var facts = Self.clean(try await extractor.extract(
                     from: text, context: ExtractionContext(sourceName: source.name, relPath: rel)))
                 if facts.count > ConnectorLimits.maxFactsPerFile {
                     facts = Array(facts.prefix(ConnectorLimits.maxFactsPerFile))
@@ -250,7 +250,7 @@ public actor ExtractionEngine {
             }
 
             do {
-                var extracted = Self.dedup(try await extractor.extract(
+                var extracted = Self.clean(try await extractor.extract(
                     from: text, context: ExtractionContext(sourceName: source.name, relPath: rel)))
                 if extracted.count > ConnectorLimits.maxFactsPerFile {
                     extracted = Array(extracted.prefix(ConnectorLimits.maxFactsPerFile))
@@ -346,9 +346,10 @@ public actor ExtractionEngine {
         return summary
     }
 
-    private static func dedup(_ facts: [ExtractedFact]) -> [ExtractedFact] {
+    /// Drop clear boilerplate, then de-duplicate by content.
+    private static func clean(_ facts: [ExtractedFact]) -> [ExtractedFact] {
         var seen = Set<String>()
-        return facts.filter {
+        return facts.filter(BoilerplateFilter.keep).filter {
             seen.insert($0.content.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)).inserted
         }
     }
