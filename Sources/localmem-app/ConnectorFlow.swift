@@ -42,20 +42,6 @@ final class ConnectorsViewModel {
         return source
     }
 
-    func run(_ source: ImportSource, force: Bool) async {
-        guard !running.contains(source.id) else { return }
-        running.insert(source.id)
-        progress[source.id] = ExtractionProgress(filesTotal: 0, filesDone: 0, factsAdded: 0, currentFile: nil)
-        let extractor = ConnectorBackends.extractor(for: source.backend)
-        let id = source.id
-        let summary = await engine.run(source: source, extractor: extractor, force: force) { p in
-            Task { @MainActor in self.progress[id] = p }
-        }
-        running.remove(source.id)
-        lastSummary[source.id] = summary
-        await refresh()
-    }
-
     /// Dry-run: extract proposals for review without writing anything.
     func preview(_ source: ImportSource, force: Bool) async -> ExtractionPreview {
         guard !running.contains(source.id) else { return ExtractionPreview() }
@@ -85,14 +71,6 @@ final class ConnectorsViewModel {
             try? await sourceStore.deleteMemories(ids: ids)
         }
         try? await sourceStore.delete(id: source.id)
-        await refresh()
-    }
-
-    func setDisconnected(_ source: ImportSource, _ disconnected: Bool) async {
-        var s = source
-        s.status = disconnected ? .disconnected : .active
-        try? await sourceStore.update(s)
-        if !disconnected { await run(s, force: false) }   // Reconnect → catch-up scan
         await refresh()
     }
 
@@ -650,8 +628,6 @@ struct ConnectedSourceRow: View {
                 Spacer()
                 if vm.running.contains(source.id) {
                     ProgressView().controlSize(.small)
-                } else if source.status == .disconnected {
-                    Pill(text: "Disconnected", color: .secondary)
                 }
                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
             }
@@ -786,11 +762,6 @@ struct SourceLandingView: View {
                     Label("Reprocess", systemImage: "arrow.clockwise")
                 }
                 .disabled(isRunning)
-                if source.status == .active {
-                    Button { Task { await vm.setDisconnected(source, true) } } label: { Label("Disconnect", systemImage: "pause") }
-                } else {
-                    Button { Task { await vm.setDisconnected(source, false); await reload() } } label: { Label("Reconnect", systemImage: "play") }
-                }
                 Button(role: .destructive) { confirmingRemove = true } label: { Label("Remove", systemImage: "trash") }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
