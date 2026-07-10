@@ -181,14 +181,31 @@ public protocol FactExtractor: Sendable {
 public enum ExtractionPrompt {
     public static func build(text: String, context: ExtractionContext) -> String {
         """
-        You extract durable personal memories from a document for a private memory store.
-        Return the lasting, important facts, preferences, and decisions — things worth \
-        remembering across future conversations. Ignore transient or trivial detail.
+        You read a document and extract the durable, reusable information worth \
+        remembering in a personal memory store: facts about who the person is and \
+        their world, their preferences, decisions, plans, and the meaningful records \
+        the document contains.
+
+        Guidelines:
+        - Capture the substance, not just the header fields. If the document contains a \
+        list or table of meaningful items (courses, subjects, transactions, tasks, \
+        people, holdings, line items), extract EACH distinct item as its own memory, \
+        including its key attributes (for a course: its name, code, and credits).
+        - Also capture the top-level facts that frame the document: who it is about, the \
+        institution or organization, identifiers, totals, and the period it covers.
+        - Prefer specific, self-contained statements over vague summaries. Each memory \
+        must make sense on its own months later, without the document in front of you.
+        - Skip pure boilerplate: page and generation timestamps, signature lines, form \
+        labels with no value, disclaimers, page numbers, and navigation text.
 
         Return ONLY a JSON array (no prose, no markdown code fences). Each item:
         {"title": "3-6 word noun phrase", "content": "one full sentence, third person, present tense", "type": "fact|preference|decision|project|note", "tags": ["2-4","lowercase","tags"]}
 
-        If there is nothing worth remembering, return [].
+        Use "fact" for biographical and contextual information and records, "preference" \
+        for likes, dislikes, and working style, "decision" for choices made, "project" \
+        for ongoing work or initiatives, and "note" only when nothing else fits.
+
+        If there is genuinely nothing worth remembering, return [].
         Do not use any tools; answer directly.
 
         Source: \(context.sourceName) — \(context.relPath)

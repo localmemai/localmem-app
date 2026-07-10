@@ -109,7 +109,7 @@ struct ConnectorWizardView: View {
 
     private enum Step: Equatable {
         case detecting
-        case chooseAgent
+        case chooseBackend
         case ready(ExtractionBackend)
         case previewing
         case review
@@ -119,15 +119,21 @@ struct ConnectorWizardView: View {
     }
 
     @State private var step: Step = .detecting
-    @State private var appleReason = ""
-    @State private var agents: [AgentChoice] = []
+    @State private var backendChoices: [BackendChoice] = []
     @State private var source: ImportSource?
     @State private var preview = ExtractionPreview()
     @State private var selected: Set<UUID> = []
     @State private var summary: ExtractionRunSummary?
     @State private var committed = false
 
-    private struct AgentChoice: Identifiable, Equatable { let id: String; let name: String }
+    private struct BackendChoice: Identifiable, Equatable {
+        let backend: ExtractionBackend
+        let title: String
+        let detail: String
+        let symbol: String
+        let agentID: String?
+        var id: String { backend.storageValue }
+    }
     private static let cliAgents = [("claude-code", "Claude Code"), ("codex", "Codex")]
 
     var body: some View {
@@ -167,22 +173,34 @@ struct ConnectorWizardView: View {
         case .detecting:
             row("hourglass", "Checking for the on-device model…")
 
-        case .chooseAgent:
+        case .chooseBackend:
             VStack(alignment: .leading, spacing: 12) {
-                row("exclamationmark.triangle", appleReason)
-                Text("Choose an agent to extract facts. Files in this source will be read by it (using its model and your plan):")
+                Text("Choose how to extract memories from your files:")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(agents) { agent in
-                    Button { step = .ready(.agent(agent.id)) } label: {
+                ForEach(backendChoices) { choice in
+                    Button { step = .ready(choice.backend) } label: {
                         HStack(spacing: 10) {
-                            AgentIcon(agentID: agent.id, symbol: "terminal", size: 20)
-                            Text(agent.name)
-                            Spacer()
+                            if let agentID = choice.agentID {
+                                AgentIcon(agentID: agentID, symbol: choice.symbol, size: 22)
+                            } else {
+                                Image(systemName: choice.symbol)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 22)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(choice.title).fontWeight(.medium)
+                                Text(choice.detail).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 4)
                             Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                         }
-                        .padding(10)
+                        .padding(11)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -314,17 +332,31 @@ struct ConnectorWizardView: View {
 
     private func detect() async {
         guard step == .detecting else { return }
+        var choices: [BackendChoice] = []
+
         if ConnectorBackends.appleAvailable {
-            step = .ready(.apple)
+            choices.append(BackendChoice(
+                backend: .apple,
+                title: "On-device model",
+                detail: "Runs entirely on your Mac — fully private. Best for notes and short documents.",
+                symbol: "apple.logo", agentID: nil))
+        }
+        let installed = await ConnectorBackends.availableAgents(catalog: Self.cliAgents)
+        for agent in installed {
+            choices.append(BackendChoice(
+                backend: .agent(agent.id),
+                title: agent.name,
+                detail: "Reads your files with \(agent.name) — more thorough on tables and complex documents. Uses your \(agent.name) plan.",
+                symbol: "terminal", agentID: agent.id))
+        }
+
+        backendChoices = choices
+        if choices.isEmpty {
+            step = .blocked("No on-device model, and no supported agent is available. Turn on Apple Intelligence, or connect Claude Code or Codex, then try again.")
+        } else if choices.count == 1 {
+            step = .ready(choices[0].backend)
         } else {
-            appleReason = ConnectorBackends.appleUnavailableReason
-            let installed = await ConnectorBackends.availableAgents(catalog: Self.cliAgents)
-            if installed.isEmpty {
-                step = .blocked("No on-device model, and no supported agent is available. Turn on Apple Intelligence, or connect Claude Code or Codex, then try again.")
-            } else {
-                agents = installed.map { AgentChoice(id: $0.id, name: $0.name) }
-                step = .chooseAgent
-            }
+            step = .chooseBackend
         }
     }
 
