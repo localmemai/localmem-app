@@ -859,7 +859,6 @@ struct ContentView: View {
 struct SidebarRail: View {
     @Binding var section: AppSection
     @Binding var selectedComingSoon: ComingSoonFeature?
-    @State private var comingSoonExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -872,12 +871,14 @@ struct SidebarRail: View {
                         withAnimation(.snappy) { section = item }
                     }
                 }
+                // Unshipped features sit inline as ordinary rows with a "Soon"
+                // badge — a disclosure group is too much chrome for so few.
+                ForEach(ComingSoonFeature.allCases) { feature in
+                    ComingSoonNavItem(feature: feature, isActive: selectedComingSoon == feature) {
+                        selectedComingSoon = feature
+                    }
+                }
             }
-
-            ComingSoonSidebarGroup(
-                expanded: $comingSoonExpanded,
-                selected: $selectedComingSoon
-            )
 
             Spacer()
         }
@@ -887,61 +888,39 @@ struct SidebarRail: View {
     }
 }
 
-struct ComingSoonSidebarGroup: View {
-    @Binding var expanded: Bool
-    @Binding var selected: ComingSoonFeature?
+/// A sidebar row for a not-yet-shipped feature: styled like `NavItem`, plus a
+/// "Soon" pill. Opens the feature's coming-soon detail page.
+struct ComingSoonNavItem: View {
+    let feature: ComingSoonFeature
+    let isActive: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                withAnimation(.snappy) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "clock.badge")
-                        .frame(width: 18)
-                        .foregroundStyle(.secondary)
-                    Text("Coming Soon")
-                    Spacer(minLength: 0)
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .contentShape(Rectangle())
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Image(systemName: feature.symbol)
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text(feature.sidebarTitle)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("Soon")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(ComingSoonFeature.allCases) { feature in
-                        Button {
-                            selected = feature
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: feature.symbol)
-                                    .frame(width: 16)
-                                    .foregroundStyle(.secondary)
-                                Text(feature.sidebarTitle)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .font(.caption)
-                            .padding(.leading, 18)
-                            .padding(.trailing, 10)
-                            .frame(height: 30)
-                            .background(
-                                selected == feature ? Color.accentColor.opacity(0.14) : .clear,
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                            .foregroundStyle(selected == feature ? Color.accentColor : .primary)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(
+                isActive ? Color.accentColor.opacity(0.14) : .clear,
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .foregroundStyle(isActive ? Color.accentColor : .primary)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2003,7 +1982,7 @@ struct MemoryEditorView: View {
                             }
                             .padding(.leading, 5)
 
-                            TextField("Tags (comma separated)", text: $tagsInput)
+                            TextField("Tags — optional, comma separated (help search find this later)", text: $tagsInput)
                                 .textFieldStyle(.roundedBorder)
 
                             VStack(alignment: .leading, spacing: 6) {
@@ -2135,9 +2114,6 @@ struct MemoryEditorView: View {
     private var validationMessage: String? {
         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Title is required."
-        }
-        if cleanedTags.isEmpty {
-            return "Add at least one tag."
         }
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Memory details are required."
