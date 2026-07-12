@@ -33,6 +33,13 @@ final class ConnectorsViewModel {
     var remainingCount: Int { queue.count + processing.count }
     var factCount: Int { states.values.reduce(0) { $0 + $1.factCount } }
 
+    /// Whether a source is part of the current run — queued or extracting.
+    /// The UI shows a spinner for the whole window, not just the in-flight
+    /// slice, so a queued file never looks stalled.
+    func isBusy(_ id: UUID) -> Bool {
+        processing.contains(id) || queue.contains { $0.source.id == id }
+    }
+
     func refresh() async {
         do {
             sources = try await sourceStore.list()
@@ -80,13 +87,14 @@ final class ConnectorsViewModel {
         worker?.cancel()
     }
 
-    func remove(_ source: ImportSource, deleteMemories: Bool) async {
+    /// Removing a file removes the memories it produced — an imported memory
+    /// without its file has no provenance, so there is no keep-memories option.
+    func remove(_ source: ImportSource) async {
         queue.removeAll { $0.source.id == source.id }
-        if deleteMemories {
-            let ids = (try? await sourceStore.allMemoryIDs(sourceID: source.id)) ?? []
-            try? await sourceStore.deleteMemories(ids: ids, actorKind: .cli, actorID: "user")
-        }
+        let ids = (try? await sourceStore.allMemoryIDs(sourceID: source.id)) ?? []
+        try? await sourceStore.deleteMemories(ids: ids, actorKind: .cli, actorID: "user")
         try? await sourceStore.delete(id: source.id)
+        states[source.id] = nil
         await refresh()
     }
 
@@ -227,7 +235,7 @@ struct ConnectorDetailView: View {
                         FileRow(
                             source: source,
                             state: vm.states[source.id],
-                            isProcessing: vm.processing.contains(source.id),
+                            isBusy: vm.isBusy(source.id),
                             isSelected: selection == source.id
                         ) { selection = source.id }
                     }
@@ -240,12 +248,15 @@ struct ConnectorDetailView: View {
                 .padding(8)
             }
             Divider()
+            // Footer height matches the detail pane's action bar so the two
+            // bottom bars sit on one line across the split.
             Button(action: onAddFiles) {
                 Label("Add files…", systemImage: "plus")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
-            .padding(10)
+            .padding(.horizontal, 10)
+            .frame(height: 56)
         }
     }
 }
@@ -253,14 +264,14 @@ struct ConnectorDetailView: View {
 private struct FileRow: View {
     let source: ImportSource
     let state: SourceFileState?
-    let isProcessing: Bool
+    let isBusy: Bool
     let isSelected: Bool
     let onSelect: () -> Void
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
-                if isProcessing {
+                if isBusy {
                     ProgressView().controlSize(.mini).frame(width: 16)
                 } else {
                     Image(systemName: FileStatusStyle.symbol(state?.status))
@@ -331,79 +342,94 @@ private struct FileDetailPane: View {
     @State private var confirmingRemove = false
 
     private var state: SourceFileState? { vm.states[source.id] }
-    private var isProcessing: Bool { vm.processing.contains(source.id) }
+    private var isBusy: Bool { vm.isBusy(source.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Image(systemName: "doc")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 40)
-                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(source.name).font(.title3.weight(.semibold))
-                    Text(source.path)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 40, height: 40)
+                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.name).font(.title3.weight(.semibold))
+                        Text(source.path)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer()
+                    Pill(text: ConnectorBackends.displayName(for: source.backend),
+                         color: source.backend.isOnDevice ? .green : .secondary)
                 }
-                Spacer()
-                Pill(text: ConnectorBackends.displayName(for: source.backend),
-                     color: source.backend.isOnDevice ? .green : .secondary)
-            }
 
-            if isProcessing {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Extracting memories…").font(.callout).foregroundStyle(.secondary)
+                if isBusy {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Extracting memories…").font(.callout).foregroundStyle(.secondary)
+                    }
+                } else {
+                    statusGrid
                 }
-            } else {
-                statusGrid
-            }
 
-            Divider()
+                Divider()
 
-            HStack {
-                Text("Memories from this file").font(.headline)
-                Spacer()
-                if !memories.isEmpty {
-                    Text("\(memories.count)").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(memories) { memory in memoryRow(memory) }
-                    if memories.isEmpty && !isProcessing {
-                        Text("No memories yet.")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 16)
+                HStack {
+                    Text("Memories from this file").font(.headline)
+                    Spacer()
+                    if !memories.isEmpty {
+                        Text("\(memories.count)").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(memories) { memory in memoryRow(memory) }
+                        if memories.isEmpty && !isBusy {
+                            Text("No memories yet.")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 16)
+                        }
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             Divider()
+            // Pinned action bar — same 56pt as the file list's footer so the
+            // two bottom bars align across the split.
             HStack(spacing: 10) {
                 Button {
                     vm.reprocess(source)
                 } label: {
                     Label("Reprocess", systemImage: "arrow.clockwise")
                 }
-                .disabled(isProcessing)
+                .disabled(isBusy)
                 Spacer()
                 Button(role: .destructive) { confirmingRemove = true } label: {
                     Label("Remove", systemImage: "trash")
                 }
             }
+            .padding(.horizontal, 20)
+            .frame(height: 56)
         }
-        .padding(20)
         .task(id: taskKey) { memories = await vm.memories(for: source) }
-        .confirmationDialog("Remove “\(source.name)”?", isPresented: $confirmingRemove, titleVisibility: .visible) {
-            Button("Remove & keep memories") { Task { await vm.remove(source, deleteMemories: false) } }
-            Button("Remove & delete its memories", role: .destructive) {
-                Task { await vm.remove(source, deleteMemories: true) }
+        .confirmationDialog(
+            "Remove “\(source.name)”?",
+            isPresented: $confirmingRemove,
+            titleVisibility: .visible
+        ) {
+            Button("Remove File & Memories", role: .destructive) {
+                Task { await vm.remove(source) }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(memories.isEmpty
+                 ? "The file will be removed from Localmem."
+                 : "^[\(memories.count) memory](inflect: true) imported from this file will be deleted from your vault.")
         }
     }
 

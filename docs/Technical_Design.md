@@ -414,7 +414,9 @@ Import…/Manage; coming-soon cards: Apple Notes, Obsidian, Notion). Import
 lands directly in the **in-window split-pane detail view** — flat file list
 left (live `○ → ⟳ → ✓` status, fact counts, `Add files…`), per-file detail
 right (status/reason, its memories with per-memory delete, **Reprocess** and
-**Remove** with a keep/delete-memories confirm). Modality budget: the open
+**Remove**, which deletes the file's imported memories with it after a
+confirm — an imported memory without its file has no provenance, so there is
+no keep-memories option). Modality budget: the open
 panel, a one-shot backend choice (only when >1 backend is available), and
 destructive confirms — no wizards, no stacked sheets.
 

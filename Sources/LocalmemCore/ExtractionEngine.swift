@@ -46,8 +46,13 @@ public actor ExtractionEngine {
         }
 
         do {
-            var facts = Self.clean(try await extractor.extract(
-                from: text, context: ExtractionContext(sourceName: source.name, relPath: rel)))
+            // Hard deadline on every backend. The agent CLI path also times out
+            // internally (ProcessRunner), but the on-device model has no timeout
+            // of its own — without this race a hung call would spin forever.
+            let context = ExtractionContext(sourceName: source.name, relPath: rel)
+            var facts = Self.clean(try await Self.withTimeout(ConnectorLimits.extractionTimeout) {
+                try await extractor.extract(from: text, context: context)
+            })
             if facts.count > ConnectorLimits.maxFactsPerFile {
                 facts = Array(facts.prefix(ConnectorLimits.maxFactsPerFile))
             }
@@ -85,6 +90,25 @@ public actor ExtractionEngine {
     private func record(_ state: SourceFileState, for source: ImportSource) async -> SourceFileState {
         try? await sourceStore.upsertFileState(sourceID: source.id, state)
         return state
+    }
+
+    /// Race an operation against a deadline; the loser is cancelled. Throws
+    /// `ExtractionError.timedOut` when the deadline wins, so the file is marked
+    /// `failed` / `timeout` (retriable) instead of hanging the run.
+    private static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw ExtractionError.timedOut
+            }
+            guard let first = try await group.next() else { throw ExtractionError.timedOut }
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Drop clear boilerplate, then de-duplicate by content.
