@@ -188,6 +188,20 @@ enum AgentConfigurationInspector {
         )
     }
 
+    /// How many known agents are currently fully configured — registered in
+    /// their MCP config, with the instruction import in place where the agent
+    /// supports one. Same definition as `AgentConfigurationState.statusText
+    /// == "Configured"`, so the overview stat card and the per-agent config
+    /// sheet can never disagree.
+    static func configuredAgentCount() -> Int {
+        KnownAgents.all.filter { agent in
+            guard let config = configURL(for: agent.id),
+                  isRegistered(agentID: agent.id, configURL: config) else { return false }
+            guard let instruction = instructionTarget(for: agent.id) else { return true }
+            return hasImportLine(relativePath: instruction.relativePath)
+        }.count
+    }
+
     static func repairAll(resetImports: Bool = false) async throws -> String {
         if resetImports {
             let installer = try InstructionsInstaller()
@@ -507,6 +521,7 @@ final class MemoryStoreViewModel {
 final class VaultStatusViewModel {
     private(set) var vaultLocked = false       // Driven by the Touch ID lock (Phase 13).
     private(set) var connectedAgents: [String] = []
+    private(set) var configuredAgents = 0
     private(set) var cloudSyncOn = false        // CloudKit arrives in Phase 14.
     private(set) var companionConnected = false // iPhone companion: future work.
     private(set) var lastActivity: Date?
@@ -530,6 +545,7 @@ final class VaultStatusViewModel {
         // connector's "import" actor, which must not count as connected agents
         // in the stat card or the status-bar agent list.
         connectedAgents = Array(Set(rows.filter { $0.actorKind == .mcp }.compactMap(\.actorID))).sorted()
+        configuredAgents = AgentConfigurationInspector.configuredAgentCount()
         lastActivity    = rows.first?.occurredAt
         memoryCount     = (try? await memoryStore.count()) ?? 0
 
@@ -1440,8 +1456,8 @@ struct StatsStrip: View {
         HStack(spacing: 12) {
             StatCard(value: "\(statusVM?.memoryCount ?? 0)",
                      label: "Memories")
-            StatCard(value: "\(statusVM?.connectedAgents.count ?? 0)",
-                     label: "Agents")
+            StatCard(value: "\(statusVM?.configuredAgents ?? 0)",
+                     label: "Agents configured")
             StatCard(value: "\(statusVM?.accessesToday ?? 0)",
                      label: "Accesses today")
             StatCard(value: "\(statusVM?.blockedCount ?? 0)",
