@@ -526,7 +526,10 @@ final class VaultStatusViewModel {
     func refresh() async {
         let rows = (try? await activityStore.recent(limit: 50)) ?? []
         recentActivity = rows
-        connectedAgents = Array(Set(rows.compactMap(\.actorID))).sorted()
+        // Agents are MCP actors only — CLI rows carry the human "user" and the
+        // connector's "import" actor, which must not count as connected agents
+        // in the stat card or the status-bar agent list.
+        connectedAgents = Array(Set(rows.filter { $0.actorKind == .mcp }.compactMap(\.actorID))).sorted()
         lastActivity    = rows.first?.occurredAt
         memoryCount     = (try? await memoryStore.count()) ?? 0
 
