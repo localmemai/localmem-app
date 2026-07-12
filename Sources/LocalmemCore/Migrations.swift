@@ -1,6 +1,20 @@
 import GRDB
 
 enum Migrations {
+    // ─────────────────────────────────────────────────────────────────────────
+    // MIGRATION DISCIPLINE — read before touching this file.
+    //
+    // `v1_initial` below is the complete launch schema, consolidated from the
+    // pre-release migrations (v1–v4) just before first ship, while every
+    // existing database was still a wipeable dev DB. That was the LAST in-place
+    // schema edit ever.
+    //
+    // From the first shipped build onward, databases in the field have applied
+    // `v1_initial` and will never re-run it. Any schema change — new table, new
+    // column, new index, new trigger — MUST be a new `registerMigration` with a
+    // new identifier (v2_..., v3_...), appended after v1. Never edit or remove
+    // an already-shipped migration.
+    // ─────────────────────────────────────────────────────────────────────────
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
@@ -102,36 +116,27 @@ enum Migrations {
                     );
                 END
                 """)
-        }
 
-        // Which memories a single activity touched. A read (search/recent) returns
-        // many memories but records one activity row with no single `memory_id`,
-        // so per-memory audit filtering can't attribute reads without this join.
-        // ON DELETE CASCADE keeps it pruned when the activity-cap trigger deletes
-        // old rows.
-        //
-        // This is a *separate* migration, not an edit to v1_initial: databases in
-        // the field already applied v1, so a v1 edit would never reach them. Uses
-        // IF NOT EXISTS so it's a no-op on any dev DB that got the table from an
-        // earlier in-place attempt.
-        migrator.registerMigration("v2_activity_memory") { db in
+            // Which memories a single activity touched. A read (search/recent)
+            // returns many memories but records one activity row with no single
+            // `memory_id`, so per-memory audit filtering can't attribute reads
+            // without this join. ON DELETE CASCADE keeps it pruned when the
+            // activity-cap trigger deletes old rows.
             try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS activity_memory (
+                CREATE TABLE activity_memory (
                     activity_id TEXT NOT NULL REFERENCES activity(id) ON DELETE CASCADE,
                     memory_id TEXT NOT NULL,
                     PRIMARY KEY (activity_id, memory_id)
                 )
                 """)
-            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_activity_memory_memory ON activity_memory(memory_id)")
-        }
+            try db.execute(sql: "CREATE INDEX idx_activity_memory_memory ON activity_memory(memory_id)")
 
-        // File connector: files the user imported from (one source per file),
-        // per-file processing state (for change detection), and which memories
-        // came from which file (for replace-all reconciliation).
-        // See docs/File_Connector_Design.md.
-        migrator.registerMigration("v3_sources") { db in
+            // File connector: files the user imported from (one source per file),
+            // per-file processing state (for change detection), and which memories
+            // came from which file (for replace-all reconciliation).
+            // See docs/File_Connector_Design.md.
             try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS sources (
+                CREATE TABLE sources (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     connector TEXT NOT NULL DEFAULT 'files',
@@ -144,7 +149,7 @@ enum Migrations {
                 )
                 """)
             try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS source_files (
+                CREATE TABLE source_files (
                     source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
                     rel_path TEXT NOT NULL,
                     content_sha256 TEXT,
@@ -157,29 +162,14 @@ enum Migrations {
                 )
                 """)
             try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS source_memories (
+                CREATE TABLE source_memories (
                     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
                     source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
                     rel_path TEXT NOT NULL,
                     PRIMARY KEY (memory_id)
                 )
                 """)
-            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_source_memories_file ON source_memories(source_id, rel_path)")
-        }
-
-        // The connector was simplified to one file per source, dropping the
-        // kind/auto_process/status columns. `v3_sources` above now creates the
-        // slim table, but databases that ran the ORIGINAL v3 still carry the old
-        // columns — and `kind`/`status` being NOT NULL with no default makes every
-        // INSERT from the current code fail (imports silently do nothing). Drop
-        // the legacy columns here. Idempotent: skips columns already absent, so
-        // it's a no-op on freshly-created databases.
-        migrator.registerMigration("v4_sources_drop_legacy_columns") { db in
-            let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(sources)")
-                .map { $0["name"] as String })
-            for legacy in ["kind", "auto_process", "status"] where columns.contains(legacy) {
-                try db.execute(sql: "ALTER TABLE sources DROP COLUMN \(legacy)")
-            }
+            try db.execute(sql: "CREATE INDEX idx_source_memories_file ON source_memories(source_id, rel_path)")
         }
 
         return migrator

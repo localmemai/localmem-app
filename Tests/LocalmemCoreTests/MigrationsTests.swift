@@ -10,55 +10,72 @@ struct MigrationsTests {
             .appendingPathComponent("lm-mig-\(UUID().uuidString).sqlite3")
     }
 
-    /// Reproduces the schema-drift bug: a database that ran the ORIGINAL
-    /// `v3_sources` (with kind/auto_process/status NOT NULL) must be repaired by
-    /// `v4` so the current `add()` — which no longer supplies those columns —
-    /// can insert again. Without v4 the INSERT fails the NOT NULL constraint on
-    /// `kind` and imports silently do nothing.
-    @Test("v4 drops legacy sources columns so imports can insert again")
-    func v4RepairsDriftedSources() async throws {
-        let url = tempURL()
-
-        // Seed a drifted database: the old sources shape, with v1..v3 recorded as
-        // applied so the migrator runs only v4.
-        var seed: DatabaseQueue? = try DatabaseQueue(path: url.path)
-        try await seed!.write { db in
-            try db.execute(sql: """
-                CREATE TABLE sources (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    connector TEXT NOT NULL DEFAULT 'files',
-                    kind TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    bookmark BLOB,
-                    backend TEXT NOT NULL,
-                    auto_process INTEGER NOT NULL DEFAULT 1,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    last_run_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """)
-            try db.execute(sql: "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
-            for id in ["v1_initial", "v2_activity_memory", "v3_sources"] {
-                try db.execute(sql: "INSERT INTO grdb_migrations (identifier) VALUES (?)", arguments: [id])
-            }
+    @Test("a fresh database applies exactly the consolidated v1_initial")
+    func freshDatabaseAppliesConsolidatedV1() async throws {
+        let db = try LocalmemDatabase(url: tempURL())
+        let applied = try await db.read { db in
+            try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
-        seed = nil   // release the connection before reopening the file
+        #expect(applied == ["v1_initial"])
+    }
 
-        // Opening through LocalmemDatabase runs the migrator, applying v4.
-        let db = try LocalmemDatabase(url: url)
+    @Test("v1_initial creates the full launch schema")
+    func v1CreatesFullSchema() async throws {
+        let db = try LocalmemDatabase(url: tempURL())
 
-        let columns = try await db.read { db in
+        let tables = try await db.read { db in
+            Set(try String.fetchAll(
+                db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"))
+        }
+        for expected in [
+            "memories", "memory_tags", "memory_agent_exclusions", "memories_fts",
+            "activity", "activity_memory",
+            "sources", "source_files", "source_memories",
+        ] {
+            #expect(tables.contains(expected), "missing table \(expected)")
+        }
+
+        // The slim sources shape — the legacy kind/auto_process/status columns
+        // from the pre-launch iterations must not exist.
+        let sourceColumns = try await db.read { db in
             Set(try Row.fetchAll(db, sql: "PRAGMA table_info(sources)").map { $0["name"] as String })
         }
-        #expect(columns.isDisjoint(with: ["kind", "auto_process", "status"]))
+        #expect(sourceColumns == [
+            "id", "name", "connector", "path", "bookmark", "backend",
+            "last_run_at", "created_at", "updated_at",
+        ])
 
-        // The insert that previously failed on the NOT NULL `kind` now succeeds.
-        let store = SourceStore(database: db)
+        let indexes = try await db.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"))
+        }
+        #expect(indexes == [
+            "idx_excl_agent", "idx_memories_created_at",
+            "idx_activity_occurred_at", "idx_activity_actor",
+            "idx_activity_memory_memory", "idx_source_memories_file",
+        ])
+
+        let triggers = try await db.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'trigger'"))
+        }
+        #expect(triggers == [
+            "memories_after_insert", "memories_after_update", "memories_after_delete",
+            "activity_cap_after_insert",
+        ])
+    }
+
+    @Test("the launch schema round-trips a memory and a source end to end")
+    func schemaSupportsCoreWrites() async throws {
+        let db = try LocalmemDatabase(url: tempURL())
+        let memoryStore = MemoryStore(database: db)
+        let sourceStore = SourceStore(database: db)
+
+        let memory = try await memoryStore.add(
+            content: "Launch schema works.", type: .note, tags: ["launch"],
+            actorKind: .cli, actorID: "test")
+        #expect(try await memoryStore.search(query: "launch").map(\.id) == [memory.id])
+
         let source = ImportSource(name: "notes.md", path: "/tmp/notes.md", backend: .apple)
-        try await store.add(source)
-        #expect(try await store.get(id: source.id)?.name == "notes.md")
-        #expect(try await store.list().count == 1)
+        try await sourceStore.add(source)
+        #expect(try await sourceStore.get(id: source.id)?.name == "notes.md")
     }
 }
