@@ -53,6 +53,10 @@ search, permissions, and audit behavior:
   individual memories.
 - **Audit log.** Every read, search, and write is attributed to the agent that
   made it and recorded so you can see what was accessed.
+- **Import from your files.** Pick Text, Markdown, or PDF files and Localmem
+  extracts the key facts into memories — on-device via Apple Intelligence when
+  available, otherwise through a CLI agent you already use (Claude Code or
+  Codex). You choose every file; nothing is scanned automatically.
 - **One-command setup.** `localmem setup` registers the MCP server with every
   installed client. Your client asks you to approve Localmem's tools the first
   time an agent uses them — approve it once. (Pass `--preauthorize` to skip that
