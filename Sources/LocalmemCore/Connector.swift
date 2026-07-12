@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Limits
 
 /// Guardrails so one huge/pathological file can't hang the app, exhaust memory,
-/// flood the store, or run up agent cost. See docs/File_Connector_Design.md.
+/// flood the store, or run up agent cost. See docs/Technical_Design.md §10.
 public enum ConnectorLimits {
     public static let maxFileSizeBytes = 20 * 1024 * 1024        // 20 MB — the PDF guard
     public static let maxTextChars = 1_000_000                    // ~1 MB of text per file

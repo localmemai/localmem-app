@@ -15,10 +15,11 @@
 7. [MCP server & tools](#7-mcp-server--tools)
 8. [Per-memory agent access control](#8-per-memory-agent-access-control)
 9. [CLI](#9-cli)
-10. [macOS app UI](#10-macos-app-ui)
-11. [Distribution & packaging](#11-distribution--packaging)
-12. [Roadmap](#12-roadmap)
-13. [Open questions](#13-open-questions)
+10. [File connector](#10-file-connector)
+11. [macOS app UI](#11-macos-app-ui)
+12. [Distribution & packaging](#12-distribution--packaging)
+13. [Roadmap](#13-roadmap)
+14. [Open questions](#14-open-questions)
 
 ---
 
@@ -207,7 +208,7 @@ than making CloudKit the source of truth for the product model.
 
 - Every MCP request is attributable to an agent/client.
 - Reads, searches, writes, and deletes are logged as access events.
-- Users inspect recent access history in the app (see §10).
+- Users inspect recent access history in the app (see §11).
 - An agent's access can be revoked without deleting the underlying user data
   (see §8).
 
@@ -348,7 +349,76 @@ The `localmem` command is the pro-user and debugging surface. It shares
 | `localmem status` | Store and registration status |
 | `localmem path` | Print the database path |
 
-## 10. macOS app UI
+## 10. File connector
+
+Import memories from files the user deliberately picks — implemented; this
+section is the source of truth (it absorbed `File_Connector_Design.md`).
+Planned successors live in their own design docs:
+[Extraction_Quality_Design.md](Extraction_Quality_Design.md) (two-pass
+extract → verify) and
+[Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
+
+### Model
+
+**Deliberate multi-file import, non-blocking, no approval gate.**
+
+- **One source per file.** The open panel is multi-select, files only
+  (Text/Markdown/PDF). No folder walking, no watching, no sync — nothing is
+  ever processed without an explicit user gesture (import, per-file
+  Reprocess). Re-picking an imported file reprocesses it instead of
+  duplicating it.
+- **No approval gate.** Extracted memories store directly (`source =
+  "import"`, default-open access); curation happens afterwards in the detail
+  view (per-memory delete). Extraction quality is carried by the pipeline —
+  see the extraction-quality design.
+- **Non-blocking.** Imports queue through a cancellable 2-wide background
+  runner (`ConnectorsViewModel`); the UI stays interactive with live
+  per-file status. Stop drops queued files; the in-flight file finishes.
+
+### Extraction backends
+
+Ladder: **Apple Foundation Models (on-device, preferred) → a CLI-capable
+configured agent (Claude Code, Codex) → unavailable.** Localmem never calls a
+model API or holds a key. The backend is chosen *before* file selection (with
+disclosure when an agent backend reads the files); there is **no silent
+fallback** from on-device to agent. Agent invocations are headless and
+injection-hardened: imported text is untrusted, so the CLI runs as a pure
+text→text call with tools disabled and MCP config stripped
+(`AgentCLIExtractor`).
+
+### Engine & reconciliation
+
+`ExtractionEngine.process(source:extractor:force:)` handles one file:
+read → hash-based change detection (unchanged files skip extraction unless
+forced) → extract → deterministic `BoilerplateFilter` + within-file dedup →
+**replace-all for that file in a single audited transaction**
+(`SourceStore.replaceMemories`). Per-file limits (20 MB pre-read size gate,
+~1 MB text, 200 facts, 180 s timeout) and every skip/failure end in a
+`status` + plain-language reason (`missing`, `unsupported`, `too_large`,
+`no_text`, `timeout`, …) — nothing fails silently.
+
+### Schema
+
+`sources` (one row per imported file: path, bookmark, backend, last_run_at),
+`source_files` (per-file hash/mtime/status/reason for change detection), and
+`source_memories` (file → memory links that make replace-all possible), with
+`ON DELETE CASCADE` throughout. Created by `v3_sources`;
+`v4_sources_drop_legacy_columns` drops the folder-era columns
+(kind/auto_process/status) from databases that ran the original v3 — the
+lesson: **never edit an applied migration in place.**
+
+### UI
+
+The Connectors section is a catalog page (available card: Files, with
+Import…/Manage; coming-soon cards: Apple Notes, Obsidian, Notion). Import
+lands directly in the **in-window split-pane detail view** — flat file list
+left (live `○ → ⟳ → ✓` status, fact counts, `Add files…`), per-file detail
+right (status/reason, its memories with per-memory delete, **Reprocess** and
+**Remove** with a keep/delete-memories confirm). Modality budget: the open
+panel, a one-shot backend choice (only when >1 backend is available), and
+destructive confirms — no wizards, no stacked sheets.
+
+## 11. macOS app UI
 
 Native macOS app, SwiftUI, links `LocalmemCore`. Apple-native design language —
 system primitives, SF Pro, 8pt grid, system accent + neutral grays, first-class
@@ -458,7 +528,7 @@ the Access Rules page as a **roster view** rather than a rules editor. Keep the
 `AgentSnapshot` / `KnownAgents` / connection-status plumbing — it's reused for the
 checkbox roster.
 
-## 11. Distribution & packaging
+## 12. Distribution & packaging
 
 Two audiences: **terminal/power users** who want just the CLI (installed like any
 dev tool), and **app users** who download the GUI (which carries the CLI with it).
@@ -543,14 +613,19 @@ Apple Developer Program ($99/yr); notarization in CI (`.app` bundling is scripte
 in [`packaging/build-dmg.sh`](../packaging/build-dmg.sh)); universal binaries; an
 EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 
-## 12. Roadmap
+## 13. Roadmap
 
 - **v0.2** — macOS vault app (SwiftUI), local storage, MCP adapter, per-memory
-  access control.
-- **v0.3** — signed/notarized distribution (DMG + Homebrew), Sparkle updates;
-  optional CloudKit **encrypted** sync; iPhone companion (browse/search/capture).
-- **v0.4** — review/approval flows; improved tagging and organization.
-- **v1.0** — additional agent adapters; stronger retrieval and ranking.
+  access control, file connector (§10).
+- **v0.3** — extraction quality: two-pass extract → verify + eval harness
+  ([design](Extraction_Quality_Design.md)); Obsidian connector
+  ([design](Obsidian_Connector_Design.md)); signed/notarized distribution
+  (DMG + Homebrew), Sparkle updates.
+- **v0.4** — optional CloudKit **encrypted** sync; iPhone companion
+  (browse/search/capture); review/approval flows; improved tagging and
+  organization.
+- **v1.0** — additional connectors (Apple Notes, Notion) and agent adapters;
+  stronger retrieval and ranking.
 
 ### Out of scope (for now)
 
@@ -558,7 +633,7 @@ Windows/Linux; Mac App Store (sandbox-incompatible); enterprise MDM; multi-user 
 auth; hardened agent identity; semantic / vector retrieval; memory version
 history beyond the audit log.
 
-## 13. Open questions
+## 14. Open questions
 
 1. **Search-index confidentiality** — encrypted FTS index, in-memory rebuild on
    unlock, or documented-tradeoff plaintext index?

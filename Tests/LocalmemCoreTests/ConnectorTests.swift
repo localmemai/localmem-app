@@ -125,3 +125,28 @@ struct BoilerplateFilterTests {
         #expect(BoilerplateFilter.isBoilerplate(f("Roll No.", "roll no.")))   // case-insensitive echo
     }
 }
+
+@Suite("ExtractionPrompt")
+struct ExtractionPromptTests {
+    @Test("build embeds the source context and ends with the document text")
+    func buildEmbedsContextAndText() {
+        let prompt = ExtractionPrompt.build(
+            text: "The document body.",
+            context: ExtractionContext(sourceName: "Files", relPath: "cv.pdf"))
+        #expect(prompt.contains("Files — cv.pdf"))
+        #expect(prompt.hasSuffix("The document body."))
+    }
+
+    @Test("build carries the output contract and the no-tools guard")
+    func buildCarriesContract() {
+        let prompt = ExtractionPrompt.build(
+            text: "x", context: ExtractionContext(sourceName: "s", relPath: "r"))
+        // The shape every backend's parser relies on…
+        #expect(prompt.contains("Return ONLY a JSON array"))
+        #expect(prompt.contains("\"title\""))
+        #expect(prompt.contains("\"fact|preference|decision|project|note\""))
+        // …and the advisory no-tools line (defense-in-depth alongside the
+        // hard-disabled tool channels in AgentCLIExtractor).
+        #expect(prompt.contains("Do not use any tools"))
+    }
+}

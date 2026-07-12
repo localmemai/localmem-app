@@ -134,7 +134,7 @@ enum Migrations {
             // File connector: files the user imported from (one source per file),
             // per-file processing state (for change detection), and which memories
             // came from which file (for replace-all reconciliation).
-            // See docs/File_Connector_Design.md.
+            // See docs/Technical_Design.md §10 (File connector).
             try db.execute(sql: """
                 CREATE TABLE sources (
                     id TEXT PRIMARY KEY,

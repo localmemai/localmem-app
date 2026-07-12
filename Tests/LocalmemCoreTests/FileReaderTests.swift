@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import CoreText
 import Testing
 @testable import LocalmemCore
 
@@ -87,5 +89,56 @@ struct FileReaderTests {
         let result = FileReader().read(url, relPath: "latin.txt")
         #expect(result.status == .processed)
         #expect(result.text?.hasPrefix("caf") == true)
+    }
+
+    @Test("An unreadable file is failed with a 'read_error' reason")
+    func unreadableFails() throws {
+        let url = try write("locked.md", "secret")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+
+        let result = FileReader().read(url, relPath: "locked.md")
+        #expect(result.status == .failed)
+        #expect(result.reasonCode == "read_error")
+        #expect(result.text == nil)
+    }
+
+    // MARK: - PDF
+
+    /// Draws `text` (if any) onto a one-page PDF at `name` in a temp dir.
+    private func writePDF(_ name: String, text: String?) throws -> URL {
+        let url = try tempDir().appendingPathComponent(name)
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let ctx = try #require(CGContext(url as CFURL, mediaBox: &mediaBox, nil))
+        ctx.beginPDFPage(nil)
+        if let text {
+            let font = CTFontCreateWithName("Helvetica" as CFString, 14, nil)
+            let attributed = NSAttributedString(string: text, attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+            ])
+            ctx.textPosition = CGPoint(x: 72, y: 720)
+            CTLineDraw(CTLineCreateWithAttributedString(attributed), ctx)
+        }
+        ctx.endPDFPage()
+        ctx.closePDF()
+        return url
+    }
+
+    @Test("A PDF with a text layer is extracted and processed")
+    func readsPDFWithText() throws {
+        let url = try writePDF("doc.pdf", text: "Hello from a PDF")
+        let result = FileReader().read(url, relPath: "doc.pdf")
+        #expect(result.status == .processed)
+        #expect(result.text?.contains("Hello from a PDF") == true)
+        #expect(result.sha256?.count == 64)
+    }
+
+    @Test("A PDF with no extractable text is skipped with 'no_text' (the scanned-PDF case)")
+    func textlessPDFSkipped() throws {
+        let url = try writePDF("scan.pdf", text: nil)
+        let result = FileReader().read(url, relPath: "scan.pdf")
+        #expect(result.status == .skipped)
+        #expect(result.reasonCode == "no_text")
+        #expect(result.text == nil)
     }
 }
