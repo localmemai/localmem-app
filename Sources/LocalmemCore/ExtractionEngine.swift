@@ -52,19 +52,17 @@ public actor ExtractionEngine {
                 facts = Array(facts.prefix(ConnectorLimits.maxFactsPerFile))
             }
 
-            // Replace-all: drop this file's old memories, insert the new set.
-            let old = try await sourceStore.memoryIDs(sourceID: source.id, relPath: rel)
-            try await sourceStore.deleteMemories(ids: old)
-
+            // Replace-all: swap this file's old memories for the new set in a
+            // single transaction — delete + insert + link + audit rows commit
+            // (or roll back) together, so an interruption can't lose the old
+            // set without landing the new one.
             let memories = facts.map {
                 Memory(type: $0.type, title: $0.title, content: $0.content, tags: $0.tags, source: "import")
             }
-            if !memories.isEmpty {
-                try await memoryStore.importMemories(memories, actorKind: .cli, actorID: "import")
-                for m in memories {
-                    try await sourceStore.link(memoryID: m.id, sourceID: source.id, relPath: rel)
-                }
-            }
+            try await sourceStore.replaceMemories(
+                sourceID: source.id, relPath: rel, with: memories,
+                actorKind: .cli, actorID: "import"
+            )
 
             var updated = source
             updated.lastRunAt = Date()

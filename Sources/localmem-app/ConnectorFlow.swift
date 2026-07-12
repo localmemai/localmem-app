@@ -84,7 +84,7 @@ final class ConnectorsViewModel {
         queue.removeAll { $0.source.id == source.id }
         if deleteMemories {
             let ids = (try? await sourceStore.allMemoryIDs(sourceID: source.id)) ?? []
-            try? await sourceStore.deleteMemories(ids: ids)
+            try? await sourceStore.deleteMemories(ids: ids, actorKind: .cli, actorID: "user")
         }
         try? await sourceStore.delete(id: source.id)
         await refresh()
@@ -102,7 +102,7 @@ final class ConnectorsViewModel {
     }
 
     func deleteMemory(_ id: UUID) async {
-        try? await sourceStore.deleteMemories(ids: [id])
+        try? await sourceStore.deleteMemories(ids: [id], actorKind: .cli, actorID: "user")
         await refresh()
     }
 

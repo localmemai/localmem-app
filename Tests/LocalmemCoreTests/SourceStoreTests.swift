@@ -58,7 +58,54 @@ struct SourceStoreTests {
 
         #expect(Set(try await sourceStore.allMemoryIDs(sourceID: source.id)) == Set(memories.map(\.id)))
 
-        try await sourceStore.deleteMemories(ids: memories.map(\.id))
+        try await sourceStore.deleteMemories(ids: memories.map(\.id), actorKind: .cli, actorID: "user")
+        #expect(try await sourceStore.allMemoryIDs(sourceID: source.id).isEmpty)
+        #expect(try await memoryStore.count() == 0)
+    }
+
+    @Test("replaceMemories swaps a file's memories atomically and links the new set")
+    func replaceMemoriesSwapsAndLinks() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let source = ImportSource(name: "doc.md", path: "/tmp/doc.md", backend: .apple)
+        try await sourceStore.add(source)
+
+        let old = [Memory(type: .fact, title: "Old", content: "Old fact.", tags: ["a"], source: "import")]
+        try await sourceStore.replaceMemories(
+            sourceID: source.id, relPath: "doc.md", with: old,
+            actorKind: .cli, actorID: "import")
+        #expect(Set(try await sourceStore.allMemoryIDs(sourceID: source.id)) == Set(old.map(\.id)))
+
+        let new = [
+            Memory(type: .fact, title: "New 1", content: "New fact one.", tags: [], source: "import"),
+            Memory(type: .preference, title: "New 2", content: "New fact two.", tags: ["b"], source: "import"),
+        ]
+        let imported = try await sourceStore.replaceMemories(
+            sourceID: source.id, relPath: "doc.md", with: new,
+            actorKind: .cli, actorID: "import")
+
+        // Old set gone, new set present and linked; tags rode along.
+        #expect(imported == 2)
+        #expect(try await memoryStore.get(id: old[0].id) == nil)
+        #expect(Set(try await sourceStore.allMemoryIDs(sourceID: source.id)) == Set(new.map(\.id)))
+        #expect(try await memoryStore.get(id: new[1].id)?.tags == ["b"])
+        #expect(try await memoryStore.count() == 2)
+    }
+
+    @Test("replaceMemories with an empty set clears the file's memories")
+    func replaceMemoriesEmptySetClears() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let source = ImportSource(name: "doc.md", path: "/tmp/doc.md", backend: .apple)
+        try await sourceStore.add(source)
+
+        let old = [Memory(type: .fact, title: "Old", content: "Old fact.", tags: [], source: "import")]
+        try await sourceStore.replaceMemories(
+            sourceID: source.id, relPath: "doc.md", with: old,
+            actorKind: .cli, actorID: "import")
+
+        let imported = try await sourceStore.replaceMemories(
+            sourceID: source.id, relPath: "doc.md", with: [],
+            actorKind: .cli, actorID: "import")
+        #expect(imported == 0)
         #expect(try await sourceStore.allMemoryIDs(sourceID: source.id).isEmpty)
         #expect(try await memoryStore.count() == 0)
     }

@@ -7,9 +7,10 @@ import FoundationModels
 // MARK: - Process runner
 
 /// Runs a command through the user's login shell (`zsh -lc`) so PATH includes
-/// node/nvm/homebrew, with a hard timeout. The prompt is passed via an
-/// environment variable and referenced as "$LM_PROMPT" so its contents are never
-/// interpreted as shell syntax (injection-safe).
+/// node/nvm/homebrew, with a hard timeout. The prompt is streamed over stdin —
+/// never shell syntax (injection-safe), and never subject to the ~1 MB kernel
+/// arg+env limit that passing it as an argument or environment variable would
+/// hit (a file near the 1M-char text cap can exceed 4 MB of UTF-8).
 enum ProcessRunner {
     struct Result: Sendable {
         var stdout: String
@@ -20,19 +21,21 @@ enum ProcessRunner {
 
     private final class Box: @unchecked Sendable { var timedOut = false }
 
-    static func runShell(_ command: String, env extra: [String: String], timeout: TimeInterval) async -> Result {
+    static func runShell(_ command: String, stdin: String? = nil, timeout: TimeInterval) async -> Result {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 proc.arguments = ["-lc", command]
-                var environment = ProcessInfo.processInfo.environment
-                for (k, v) in extra { environment[k] = v }
-                proc.environment = environment
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardOutput = outPipe
                 proc.standardError = errPipe
+
+                // Without input the child gets EOF immediately (a CLI waiting
+                // on a TTY would otherwise hang until the watchdog kills it).
+                let inPipe = Pipe()
+                proc.standardInput = stdin == nil ? FileHandle.nullDevice : inPipe
 
                 var outData = Data(), errData = Data()
                 let group = DispatchGroup()
@@ -46,6 +49,15 @@ enum ProcessRunner {
                 } catch {
                     cont.resume(returning: Result(stdout: "", stderr: error.localizedDescription, exitCode: -1, timedOut: false))
                     return
+                }
+
+                // Feed stdin off-thread: a prompt larger than the pipe buffer
+                // (~64 KB) would deadlock if written before waiting.
+                if let stdin {
+                    DispatchQueue.global().async {
+                        inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+                        try? inPipe.fileHandleForWriting.close()
+                    }
                 }
 
                 let box = Box()
@@ -69,7 +81,7 @@ enum ProcessRunner {
 
     /// Whether a command is resolvable on the login-shell PATH.
     static func commandExists(_ name: String) async -> Bool {
-        let r = await runShell("command -v \(name) >/dev/null 2>&1", env: [:], timeout: 15)
+        let r = await runShell("command -v \(name) >/dev/null 2>&1", timeout: 15)
         return r.exitCode == 0
     }
 }
@@ -89,20 +101,24 @@ struct AgentCLIExtractor: FactExtractor {
         // "do not use tools" prompt line. Critically this strips the user's MCP
         // config (including the pre-authorized localmem tools), so a crafted
         // document cannot reach memory_store or any other pre-approved tool.
+        // The prompt itself arrives over stdin: shell-inert and immune to the
+        // kernel arg+env size limit a near-cap file would blow through.
         switch agentID {
         case "claude-code":
             // --strict-mcp-config + an empty --mcp-config loads no MCP servers;
-            // --disallowedTools "*" blocks the built-in tools.
-            command = "claude -p \"$LM_PROMPT\" --output-format json"
+            // --disallowedTools "*" blocks the built-in tools. With no prompt
+            // argument, `claude -p` reads the prompt from stdin.
+            command = "claude -p --output-format json"
                 + " --disallowedTools \"*\" --strict-mcp-config --mcp-config '{\"mcpServers\":{}}'"
         case "codex":
-            // Read-only sandbox blocks writes/exec; empty mcp_servers strips MCP.
-            command = "codex exec --sandbox read-only -c mcp_servers='{}' \"$LM_PROMPT\""
+            // Read-only sandbox blocks writes/exec; empty mcp_servers strips
+            // MCP. `-` reads the prompt from stdin.
+            command = "codex exec --sandbox read-only -c mcp_servers='{}' -"
         default:
             throw ExtractionError.unavailable("Unsupported agent: \(agentID)")
         }
 
-        let result = await ProcessRunner.runShell(command, env: ["LM_PROMPT": prompt],
+        let result = await ProcessRunner.runShell(command, stdin: prompt,
                                                   timeout: ConnectorLimits.extractionTimeout)
         if result.timedOut { throw ExtractionError.timedOut }
         guard result.exitCode == 0 else {

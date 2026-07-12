@@ -365,24 +365,27 @@ struct PreauthorizationTests {
             home.appendingPathComponent(".gemini/config/mcp_config.json")
         }
 
-        @Test("greenfield writes trust:true with server-wide scope")
-        func greenfield() throws {
+        // Server-wide trust would auto-approve memory_update (deliberately
+        // excluded from pre-auth), so the registrar must never write it.
+
+        @Test("preauthorize skips instead of writing server-wide trust")
+        func skipsInsteadOfTrusting() throws {
             let home = PreauthorizationTests.makeHome()
             defer { try? FileManager.default.removeItem(at: home) }
 
             let r = AntigravityRegistrar(homeDirectory: home)
             let outcome = try r.preauthorize(tools: tools)
-            guard case .authorized(.server) = outcome else {
-                Issue.record("expected .authorized(.server), got \(outcome)")
+            guard case .skipped(let reason) = outcome else {
+                Issue.record("expected .skipped, got \(outcome)")
                 return
             }
-
-            let entry = JSONConfig.readMcpEntry(at: configURL(home: home), serverName: "localmem")
-            #expect((entry?["trust"] as? Bool) == true)
+            #expect(reason.contains("memory_update"))
+            // Nothing was written — no config file appears.
+            #expect(!FileManager.default.fileExists(atPath: configURL(home: home).path))
         }
 
-        @Test("preserves a user-set includeTools array")
-        func preservesIncludeTools() throws {
+        @Test("preauthorize leaves an existing config untouched")
+        func leavesConfigUntouched() throws {
             let home = PreauthorizationTests.makeHome()
             defer { try? FileManager.default.removeItem(at: home) }
 
@@ -393,25 +396,30 @@ struct PreauthorizationTests {
                     "includeTools": ["memory_search"],
                 ]]]
             }
+            let before = try Data(contentsOf: url)
 
             let r = AntigravityRegistrar(homeDirectory: home)
             _ = try r.preauthorize(tools: tools)
 
+            #expect(try Data(contentsOf: url) == before)
             let entry = JSONConfig.readMcpEntry(at: url, serverName: "localmem")
-            #expect((entry?["trust"] as? Bool) == true)
-            #expect((entry?["includeTools"] as? [String]) == ["memory_search"])
+            #expect(entry?["trust"] == nil)
         }
 
-        @Test("idempotent on second pass")
-        func idempotent() throws {
+        @Test("state still reports a manually user-set trust flag")
+        func reportsManualTrust() throws {
             let home = PreauthorizationTests.makeHome()
             defer { try? FileManager.default.removeItem(at: home) }
 
+            let url = configURL(home: home)
+            try JSONConfig.update(at: url) { _ in
+                ["mcpServers": ["localmem": ["command": "/bin/x", "trust": true]]]
+            }
+
             let r = AntigravityRegistrar(homeDirectory: home)
-            _ = try r.preauthorize(tools: tools)
-            let second = try r.preauthorize(tools: tools)
-            if case .alreadyAuthorized = second {} else {
-                Issue.record("expected .alreadyAuthorized, got \(second)")
+            guard case .authorized = r.preauthorizationState(tools: tools) else {
+                Issue.record("expected .authorized for user-set trust")
+                return
             }
         }
     }

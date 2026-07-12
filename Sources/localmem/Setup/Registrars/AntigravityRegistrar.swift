@@ -51,26 +51,16 @@ struct AntigravityRegistrar: ClientRegistrar {
     // MARK: - Pre-authorization
     //
     // Per-tool `alwaysAllow` is documented but not honored as of March 2026.
-    // Server-wide `trust: true` is the only working mechanism. Acceptable
-    // because every tool currently on this server is non-destructive; revisit
-    // when `memory_delete` ships (resolved §8 — not preemptively).
-    //
-    // `tools` is ignored — this client only supports server-wide trust.
+    // Antigravity's only working mechanism is server-wide `trust: true` — and
+    // that is all-or-nothing: it would silently auto-approve every tool on the
+    // server, including `memory_update`, which is deliberately excluded from
+    // pre-authorization (see `Localmem.preauthorizedToolNames`). So we never
+    // write `trust` ourselves; we skip with the reason surfaced in the report.
+    // A user who accepts the trade-off can still set trust manually —
+    // `preauthorizationState` reports it if they did.
 
     func preauthorize(tools _: [String]) throws -> PreauthorizationOutcome {
-        var wasTrusted = false
-        let changed = try JSONConfig.update(at: configURL) { current in
-            var next = current
-            var servers = (next["mcpServers"] as? [String: Any]) ?? [:]
-            var entry = (servers["localmem"] as? [String: Any]) ?? [:]
-            wasTrusted = (entry["trust"] as? Bool) == true
-            entry["trust"] = true
-            servers["localmem"] = entry
-            next["mcpServers"] = servers
-            return next
-        }
-        if !changed { return .alreadyAuthorized(scope: .server) }
-        return wasTrusted ? .alreadyAuthorized(scope: .server) : .authorized(scope: .server)
+        .skipped(reason: "Antigravity only supports server-wide trust, which would auto-approve memory_update")
     }
 
     func preauthorizationState(tools _: [String]) -> PreauthorizationState {

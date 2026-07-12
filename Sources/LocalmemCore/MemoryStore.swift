@@ -91,37 +91,8 @@ public actor MemoryStore {
         return try await database.write { db in
             var imported = 0
             for memory in memories {
-                try db.execute(
-                    sql: """
-                        INSERT OR IGNORE INTO memories (id, type, title, content, source, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                    arguments: [
-                        memory.id.uuidString,
-                        memory.type.rawValue,
-                        memory.title,
-                        Data(memory.content.utf8),
-                        memory.source,
-                        DateFormat.iso8601.string(from: memory.createdAt),
-                        DateFormat.iso8601.string(from: memory.updatedAt),
-                    ]
-                )
-                // A pre-existing id is a no-op INSERT; only wire up the child
-                // rows for memories we actually added so we never touch an
-                // existing memory's tags or exclusions.
-                guard db.changesCount > 0 else { continue }
+                guard try Self.insertPreservingIdentity(memory, in: db) else { continue }
                 imported += 1
-                for tag in memory.tags {
-                    try db.execute(
-                        sql: "INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)",
-                        arguments: [memory.id.uuidString, tag]
-                    )
-                }
-                try Self.replaceExclusions(
-                    memoryID: memory.id.uuidString,
-                    agents: Self.normalizedAgents(memory.excludedAgents),
-                    in: db
-                )
             }
             try ActivityStore.add(Activity(
                 actorKind: actorKind,
@@ -516,6 +487,42 @@ public actor MemoryStore {
     }
 
     // MARK: - Helpers
+
+    /// Inserts a memory preserving its id, timestamps, tags, exclusions, and
+    /// source (INSERT OR IGNORE — a pre-existing id is a no-op and returns
+    /// false, so callers never touch an existing memory's child rows). Static
+    /// so callers composing larger transactions (`importMemories`,
+    /// `SourceStore.replaceMemories`) share one insert path.
+    static func insertPreservingIdentity(_ memory: Memory, in db: Database) throws -> Bool {
+        try db.execute(
+            sql: """
+                INSERT OR IGNORE INTO memories (id, type, title, content, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+            arguments: [
+                memory.id.uuidString,
+                memory.type.rawValue,
+                memory.title,
+                Data(memory.content.utf8),
+                memory.source,
+                DateFormat.iso8601.string(from: memory.createdAt),
+                DateFormat.iso8601.string(from: memory.updatedAt),
+            ]
+        )
+        guard db.changesCount > 0 else { return false }
+        for tag in memory.tags {
+            try db.execute(
+                sql: "INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)",
+                arguments: [memory.id.uuidString, tag]
+            )
+        }
+        try replaceExclusions(
+            memoryID: memory.id.uuidString,
+            agents: normalizedAgents(memory.excludedAgents),
+            in: db
+        )
+        return true
+    }
 
     private static func fetchMemory(id: String, requestingAgent: String? = nil, in db: Database) throws -> Memory? {
         let row: Row?

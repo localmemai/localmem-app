@@ -145,12 +145,76 @@ public final class SourceStore: Sendable {
     }
 
     /// Delete memories (cascades tags/exclusions/source_memories via FK).
-    public func deleteMemories(ids: [UUID]) async throws {
+    /// Writes one `memory_delete` activity row per memory in the same
+    /// transaction, so connector deletions show up in the audit log exactly
+    /// like `MemoryStore.delete` ones.
+    public func deleteMemories(ids: [UUID], actorKind: ActorKind, actorID: String? = nil) async throws {
         guard !ids.isEmpty else { return }
         try await database.write { db in
             for id in ids {
                 try db.execute(sql: "DELETE FROM memories WHERE id = ?", arguments: [id.uuidString])
+                guard db.changesCount > 0 else { continue }
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind,
+                    actorID: actorID,
+                    operation: "memory_delete",
+                    memoryID: id
+                ), in: db)
             }
+        }
+    }
+
+    /// Replace-all reconciliation for one file, in a single transaction:
+    /// deletes the file's previous memories, inserts the freshly extracted
+    /// set, links each new memory back to the file, and writes the audit rows.
+    /// Atomic — a crash or error can never land between the delete and the
+    /// insert, so the store always holds either the file's old set or its new
+    /// set, never neither. Returns the number of memories actually inserted.
+    @discardableResult
+    public func replaceMemories(
+        sourceID: UUID,
+        relPath: String,
+        with memories: [Memory],
+        actorKind: ActorKind,
+        actorID: String? = nil
+    ) async throws -> Int {
+        try await database.write { db in
+            // Drop this file's old memories (cascades tags/exclusions/links).
+            let old = try String.fetchAll(
+                db,
+                sql: "SELECT memory_id FROM source_memories WHERE source_id = ? AND rel_path = ?",
+                arguments: [sourceID.uuidString, relPath]
+            )
+            for id in old {
+                try db.execute(sql: "DELETE FROM memories WHERE id = ?", arguments: [id])
+                guard db.changesCount > 0 else { continue }
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind,
+                    actorID: actorID,
+                    operation: "memory_delete",
+                    memoryID: UUID(uuidString: id)
+                ), in: db)
+            }
+
+            // Insert the new set and link each memory back to the file.
+            var imported = 0
+            for memory in memories {
+                guard try MemoryStore.insertPreservingIdentity(memory, in: db) else { continue }
+                imported += 1
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO source_memories (memory_id, source_id, rel_path) VALUES (?, ?, ?)",
+                    arguments: [memory.id.uuidString, sourceID.uuidString, relPath]
+                )
+            }
+            if imported > 0 {
+                try ActivityStore.add(Activity(
+                    actorKind: actorKind,
+                    actorID: actorID,
+                    operation: "memory_import",
+                    resultCount: imported
+                ), in: db)
+            }
+            return imported
         }
     }
 
