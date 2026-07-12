@@ -83,10 +83,23 @@ struct AgentCLIExtractor: FactExtractor {
     func extract(from text: String, context: ExtractionContext) async throws -> [ExtractedFact] {
         let prompt = ExtractionPrompt.build(text: text, context: context)
         let command: String
+        // Imported file text is untrusted and embedded verbatim in the prompt, so
+        // it can attempt prompt injection. Run the agent as a pure text→text call
+        // with every tool channel hard-disabled — NOT relying on the advisory
+        // "do not use tools" prompt line. Critically this strips the user's MCP
+        // config (including the pre-authorized localmem tools), so a crafted
+        // document cannot reach memory_store or any other pre-approved tool.
         switch agentID {
-        case "claude-code": command = "claude -p \"$LM_PROMPT\" --output-format json"
-        case "codex":       command = "codex exec \"$LM_PROMPT\""
-        default:            throw ExtractionError.unavailable("Unsupported agent: \(agentID)")
+        case "claude-code":
+            // --strict-mcp-config + an empty --mcp-config loads no MCP servers;
+            // --disallowedTools "*" blocks the built-in tools.
+            command = "claude -p \"$LM_PROMPT\" --output-format json"
+                + " --disallowedTools \"*\" --strict-mcp-config --mcp-config '{\"mcpServers\":{}}'"
+        case "codex":
+            // Read-only sandbox blocks writes/exec; empty mcp_servers strips MCP.
+            command = "codex exec --sandbox read-only -c mcp_servers='{}' \"$LM_PROMPT\""
+        default:
+            throw ExtractionError.unavailable("Unsupported agent: \(agentID)")
         }
 
         let result = await ProcessRunner.runShell(command, env: ["LM_PROMPT": prompt],
@@ -142,14 +155,13 @@ struct AppleFoundationExtractor: FactExtractor {
 
 // MARK: - Backend availability + selection
 
-struct BackendOption: Identifiable, Equatable {
-    let backend: ExtractionBackend
-    let title: String
-    let detail: String
-    var id: String { backend.storageValue }
-}
-
 enum ConnectorBackends {
+    /// CLI agents Localmem can drive headlessly: id → display name → command.
+    static let cliAgents: [(id: String, name: String, command: String)] = [
+        ("claude-code", "Claude Code", "claude"),
+        ("codex", "Codex", "codex"),
+    ]
+
     /// Whether Apple's on-device model is usable right now.
     static var appleAvailable: Bool {
         #if canImport(FoundationModels)
@@ -185,20 +197,23 @@ enum ConnectorBackends {
         #endif
     }
 
-    /// CLI agents that Localmem can drive headlessly, among those installed.
-    /// `catalog` maps agent id → display name.
-    static func availableAgents(catalog: [(id: String, name: String)]) async -> [(id: String, name: String)] {
+    /// The CLI agents from the catalog that are actually installed.
+    static func availableAgents() async -> [(id: String, name: String)] {
         var out: [(id: String, name: String)] = []
-        for agent in catalog {
-            let cli: String?
-            switch agent.id {
-            case "claude-code": cli = "claude"
-            case "codex":       cli = "codex"
-            default:            cli = nil
+        for agent in cliAgents {
+            if await ProcessRunner.commandExists(agent.command) {
+                out.append((agent.id, agent.name))
             }
-            if let cli, await ProcessRunner.commandExists(cli) { out.append(agent) }
         }
         return out
+    }
+
+    /// User-facing name for a backend (detail-pane badge, choice rows).
+    static func displayName(for backend: ExtractionBackend) -> String {
+        switch backend {
+        case .apple:         return "On-device"
+        case .agent(let id): return cliAgents.first { $0.id == id }?.name ?? id
+        }
     }
 
     /// The extractor for a chosen backend.

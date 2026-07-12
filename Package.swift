@@ -55,7 +55,10 @@ let package = Package(
         ),
         .testTarget(
             name: "LocalmemCoreTests",
-            dependencies: ["LocalmemCore"]
+            dependencies: [
+                "LocalmemCore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
         ),
         .testTarget(
             name: "LocalmemMCPTests",

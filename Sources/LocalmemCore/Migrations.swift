@@ -125,21 +125,19 @@ enum Migrations {
             try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_activity_memory_memory ON activity_memory(memory_id)")
         }
 
-        // File connector: sources the user imports from, per-file processing
-        // state (for change detection), and which memories came from which file
-        // (for replace-all reconciliation). See docs/File_Connector_Design.md.
+        // File connector: files the user imported from (one source per file),
+        // per-file processing state (for change detection), and which memories
+        // came from which file (for replace-all reconciliation).
+        // See docs/File_Connector_Design.md.
         migrator.registerMigration("v3_sources") { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS sources (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     connector TEXT NOT NULL DEFAULT 'files',
-                    kind TEXT NOT NULL,
                     path TEXT NOT NULL,
                     bookmark BLOB,
                     backend TEXT NOT NULL,
-                    auto_process INTEGER NOT NULL DEFAULT 1,
-                    status TEXT NOT NULL DEFAULT 'active',
                     last_run_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -167,6 +165,21 @@ enum Migrations {
                 )
                 """)
             try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_source_memories_file ON source_memories(source_id, rel_path)")
+        }
+
+        // The connector was simplified to one file per source, dropping the
+        // kind/auto_process/status columns. `v3_sources` above now creates the
+        // slim table, but databases that ran the ORIGINAL v3 still carry the old
+        // columns — and `kind`/`status` being NOT NULL with no default makes every
+        // INSERT from the current code fail (imports silently do nothing). Drop
+        // the legacy columns here. Idempotent: skips columns already absent, so
+        // it's a no-op on freshly-created databases.
+        migrator.registerMigration("v4_sources_drop_legacy_columns") { db in
+            let columns = Set(try Row.fetchAll(db, sql: "PRAGMA table_info(sources)")
+                .map { $0["name"] as String })
+            for legacy in ["kind", "auto_process", "status"] where columns.contains(legacy) {
+                try db.execute(sql: "ALTER TABLE sources DROP COLUMN \(legacy)")
+            }
         }
 
         return migrator

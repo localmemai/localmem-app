@@ -21,43 +21,22 @@ public struct ReadFile: Sendable {
 public struct FileReader: Sendable {
     public init() {}
 
-    /// Supported files under a source root (recursive for folders), capped.
-    public func enumerate(root: URL, kind: ImportSource.Kind) -> [URL] {
-        if kind == .file { return [root] }
-        let fm = FileManager.default
-        guard let walker = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
-
-        var files: [URL] = []
-        for case let url as URL in walker {
-            guard ConnectorLimits.supportedExtensions.contains(url.pathExtension.lowercased()) else { continue }
-            if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
-                files.append(url)
-            }
-            if files.count >= ConnectorLimits.maxFilesPerSource { break }
-        }
-        return files.sorted { $0.path < $1.path }
-    }
-
-    /// A file's path relative to the source root (for display + linking).
-    public func relPath(of url: URL, root: URL, kind: ImportSource.Kind) -> String {
-        if kind == .file { return url.lastPathComponent }
-        let rootPath = root.standardizedFileURL.path
-        let filePath = url.standardizedFileURL.path
-        if filePath.hasPrefix(rootPath) {
-            return String(filePath.dropFirst(rootPath.count))
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        }
-        return url.lastPathComponent
-    }
-
     public func read(_ url: URL, relPath: String) -> ReadFile {
+        // A source is one deliberately chosen file; if it's gone, say so
+        // plainly rather than reporting a generic read error.
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return fail(relPath, nil, "missing", "File no longer exists at this location.")
+        }
+
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attrs?[.size] as? Int) ?? 0
         let mtime = attrs?[.modificationDate] as? Date
+
+        // The open panel filters types already; this is the backstop.
+        guard ConnectorLimits.supportedExtensions.contains(url.pathExtension.lowercased()) else {
+            return skip(relPath, mtime, "unsupported",
+                        "Unsupported file type (Text, Markdown, and PDF are supported).")
+        }
 
         // Size gate first — a too-big file is never read or parsed.
         if size > ConnectorLimits.maxFileSizeBytes {

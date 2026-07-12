@@ -22,13 +22,12 @@ public final class SourceStore: Sendable {
             try db.execute(
                 sql: """
                     INSERT INTO sources
-                    (id, name, connector, kind, path, bookmark, backend, auto_process, status, last_run_at, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, connector, path, bookmark, backend, last_run_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
-                    source.id.uuidString, source.name, source.connector, source.kind.rawValue,
+                    source.id.uuidString, source.name, source.connector,
                     source.path, source.bookmark, source.backend.storageValue,
-                    source.autoProcess ? 1 : 0, source.status.rawValue,
                     source.lastRunAt.map(DateFormat.iso8601.string(from:)),
                     DateFormat.iso8601.string(from: source.createdAt),
                     DateFormat.iso8601.string(from: source.updatedAt),
@@ -56,12 +55,12 @@ public final class SourceStore: Sendable {
         try await database.write { db in
             try db.execute(
                 sql: """
-                    UPDATE sources SET name = ?, backend = ?, auto_process = ?, status = ?,
-                        last_run_at = ?, updated_at = ? WHERE id = ?
+                    UPDATE sources SET name = ?, backend = ?, last_run_at = ?, updated_at = ?
+                    WHERE id = ?
                     """,
                 arguments: [
-                    source.name, source.backend.storageValue, source.autoProcess ? 1 : 0,
-                    source.status.rawValue, source.lastRunAt.map(DateFormat.iso8601.string(from:)),
+                    source.name, source.backend.storageValue,
+                    source.lastRunAt.map(DateFormat.iso8601.string(from:)),
                     DateFormat.iso8601.string(from: Date()), source.id.uuidString,
                 ]
             )
@@ -126,21 +125,6 @@ public final class SourceStore: Sendable {
         }
     }
 
-    /// Remove file-state rows whose files no longer exist under the source.
-    public func removeMissingFileStates(sourceID: UUID, keeping relPaths: Set<String>) async throws -> [String] {
-        try await database.write { db in
-            let existing = try String.fetchAll(db,
-                sql: "SELECT rel_path FROM source_files WHERE source_id = ?",
-                arguments: [sourceID.uuidString])
-            let gone = existing.filter { !relPaths.contains($0) }
-            for rel in gone {
-                try db.execute(sql: "DELETE FROM source_files WHERE source_id = ? AND rel_path = ?",
-                               arguments: [sourceID.uuidString, rel])
-            }
-            return gone
-        }
-    }
-
     // MARK: - Memory links + reconciliation
 
     public func memoryIDs(sourceID: UUID, relPath: String) async throws -> [UUID] {
@@ -180,34 +164,10 @@ public final class SourceStore: Sendable {
         }
     }
 
-    // MARK: - Stats
-
-    public func stats(sourceID: UUID) async throws -> SourceStats {
-        try await database.read { db in
-            func count(_ status: String) throws -> Int {
-                try Int.fetchOne(db,
-                    sql: "SELECT COUNT(*) FROM source_files WHERE source_id = ? AND status = ?",
-                    arguments: [sourceID.uuidString, status]) ?? 0
-            }
-            let processed = try count("processed") + count("partial")
-            let skipped = try count("skipped")
-            let failed = try count("failed")
-            let facts = try Int.fetchOne(db,
-                sql: "SELECT COUNT(*) FROM source_memories WHERE source_id = ?",
-                arguments: [sourceID.uuidString]) ?? 0
-            let last = try String.fetchOne(db,
-                sql: "SELECT MAX(processed_at) FROM source_files WHERE source_id = ?",
-                arguments: [sourceID.uuidString]).flatMap(DateFormat.iso8601.date(from:))
-            return SourceStats(filesProcessed: processed, filesSkipped: skipped,
-                               filesFailed: failed, factCount: facts, lastProcessed: last)
-        }
-    }
-
     // MARK: - Row mapping
 
     private static func source(from row: Row) -> ImportSource? {
         guard let id = UUID(uuidString: row["id"]),
-              let kind = ImportSource.Kind(rawValue: row["kind"]),
               let backend = ExtractionBackend(storageValue: row["backend"]),
               let created = DateFormat.iso8601.date(from: row["created_at"]),
               let updated = DateFormat.iso8601.date(from: row["updated_at"])
@@ -216,12 +176,9 @@ public final class SourceStore: Sendable {
             id: id,
             name: row["name"],
             connector: row["connector"],
-            kind: kind,
             path: row["path"],
             bookmark: row["bookmark"],
             backend: backend,
-            autoProcess: (row["auto_process"] as Int? ?? 1) != 0,
-            status: ImportSource.Status(rawValue: row["status"]) ?? .active,
             lastRunAt: (row["last_run_at"] as String?).flatMap(DateFormat.iso8601.date(from:)),
             createdAt: created,
             updatedAt: updated

@@ -8,7 +8,7 @@ public enum ConnectorLimits {
     public static let maxFileSizeBytes = 20 * 1024 * 1024        // 20 MB — the PDF guard
     public static let maxTextChars = 1_000_000                    // ~1 MB of text per file
     public static let maxFactsPerFile = 200
-    public static let maxFilesPerSource = 5_000
+    public static let maxFilesPerBatch = 5_000                    // sanity cap on one panel selection
     public static let extractionTimeout: TimeInterval = 180
     public static let supportedExtensions: Set<String> = ["txt", "md", "markdown", "text", "pdf"]
 }
@@ -43,20 +43,16 @@ public enum ExtractionBackend: Equatable, Sendable {
 
 // MARK: - Source
 
-/// A folder or file the user connected to import memories from.
+/// A file the user deliberately imported memories from. One source per file —
+/// nothing is ever processed without an explicit user gesture (add, reprocess),
+/// so there is no folder walking, watching, or pause state.
 public struct ImportSource: Identifiable, Sendable, Equatable {
-    public enum Kind: String, Sendable { case folder, file }
-    public enum Status: String, Sendable { case active, disconnected }
-
     public let id: UUID
     public var name: String
     public var connector: String
-    public var kind: Kind
     public var path: String
     public var bookmark: Data?
     public var backend: ExtractionBackend
-    public var autoProcess: Bool
-    public var status: Status
     public var lastRunAt: Date?
     public let createdAt: Date
     public var updatedAt: Date
@@ -65,12 +61,9 @@ public struct ImportSource: Identifiable, Sendable, Equatable {
         id: UUID = UUID(),
         name: String,
         connector: String = "files",
-        kind: Kind,
         path: String,
         bookmark: Data? = nil,
         backend: ExtractionBackend,
-        autoProcess: Bool = true,
-        status: Status = .active,
         lastRunAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -78,19 +71,16 @@ public struct ImportSource: Identifiable, Sendable, Equatable {
         self.id = id
         self.name = name
         self.connector = connector
-        self.kind = kind
         self.path = path
         self.bookmark = bookmark
         self.backend = backend
-        self.autoProcess = autoProcess
-        self.status = status
         self.lastRunAt = lastRunAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 }
 
-/// Per-file processing state, for change detection and the landing page.
+/// Per-file processing state, for change detection and the detail view.
 public struct SourceFileState: Sendable, Equatable, Identifiable {
     public enum Status: String, Sendable { case pending, processed, partial, skipped, failed }
 
@@ -116,24 +106,6 @@ public struct SourceFileState: Sendable, Equatable, Identifiable {
         self.reasonCode = reasonCode
         self.error = error
         self.factCount = factCount
-    }
-}
-
-/// Aggregate stats shown on a source's landing page.
-public struct SourceStats: Sendable, Equatable {
-    public var filesProcessed: Int
-    public var filesSkipped: Int
-    public var filesFailed: Int
-    public var factCount: Int
-    public var lastProcessed: Date?
-
-    public init(filesProcessed: Int = 0, filesSkipped: Int = 0, filesFailed: Int = 0,
-                factCount: Int = 0, lastProcessed: Date? = nil) {
-        self.filesProcessed = filesProcessed
-        self.filesSkipped = filesSkipped
-        self.filesFailed = filesFailed
-        self.factCount = factCount
-        self.lastProcessed = lastProcessed
     }
 }
 
