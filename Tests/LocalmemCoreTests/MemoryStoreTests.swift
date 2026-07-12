@@ -38,6 +38,50 @@ struct MemoryStoreTests {
         #expect(misses.isEmpty)
     }
 
+    @Test func searchMatchesTags() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // The semantic-bridge case: neither title nor content mentions "coffee",
+        // only the tags do. Search must still surface it.
+        let memory = try await store.add(
+            content: "Prefers flat white with oat milk.",
+            type: .preference,
+            title: "Morning drink",
+            tags: ["coffee", "drink", "morning_routine"],
+            actorKind: .cli, actorID: "user"
+        )
+        #expect(try await store.search(query: "coffee").map(\.id) == [memory.id])
+        // snake_case tags tokenize on the underscore, so the broad term hits too.
+        #expect(try await store.search(query: "routine").map(\.id) == [memory.id])
+    }
+
+    @Test func updateReindexesTagsForSearch() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let memory = try await store.add(
+            content: "Prefers flat white with oat milk.",
+            type: .preference,
+            tags: ["coffee"],
+            actorKind: .cli, actorID: "user"
+        )
+        _ = try await store.update(
+            id: memory.id,
+            content: memory.content,
+            type: memory.type,
+            tags: ["espresso"],
+            actorKind: .cli, actorID: "user"
+        )
+        // The replaced tag stops matching; the new one starts.
+        #expect(try await store.search(query: "coffee").isEmpty)
+        #expect(try await store.search(query: "espresso").map(\.id) == [memory.id])
+
+        // And a deleted memory's tags leave the index with it.
+        _ = try await store.delete(id: memory.id, actorKind: .cli, actorID: "user")
+        #expect(try await store.search(query: "espresso").isEmpty)
+    }
+
     @Test func getById() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }

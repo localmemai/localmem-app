@@ -59,6 +59,7 @@ struct MigrationsTests {
         }
         #expect(triggers == [
             "memories_after_insert", "memories_after_update", "memories_after_delete",
+            "memory_tags_after_insert", "memory_tags_after_delete",
             "activity_cap_after_insert",
         ])
     }

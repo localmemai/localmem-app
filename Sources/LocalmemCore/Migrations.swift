@@ -55,19 +55,24 @@ enum Migrations {
 
             try db.execute(sql: "CREATE INDEX idx_memories_created_at ON memories(created_at DESC)")
 
+            // Tags are indexed alongside title/content: they're the semantic
+            // bridge for a lexical search — "coffee" must surface a memory
+            // whose content only says "flat white". Kept in sync by the
+            // memory_tags triggers below, since tags live in their own table.
             try db.execute(sql: """
                 CREATE VIRTUAL TABLE memories_fts USING fts5(
                     memory_id UNINDEXED,
                     title,
                     content_plaintext,
+                    tags,
                     tokenize = 'unicode61'
                 )
                 """)
 
             try db.execute(sql: """
                 CREATE TRIGGER memories_after_insert AFTER INSERT ON memories BEGIN
-                    INSERT INTO memories_fts(memory_id, title, content_plaintext)
-                    VALUES (NEW.id, COALESCE(NEW.title, ''), CAST(NEW.content AS TEXT));
+                    INSERT INTO memories_fts(memory_id, title, content_plaintext, tags)
+                    VALUES (NEW.id, COALESCE(NEW.title, ''), CAST(NEW.content AS TEXT), '');
                 END
                 """)
 
@@ -83,6 +88,29 @@ enum Migrations {
             try db.execute(sql: """
                 CREATE TRIGGER memories_after_delete AFTER DELETE ON memories BEGIN
                     DELETE FROM memories_fts WHERE memory_id = OLD.id;
+                END
+                """)
+
+            // Keep the FTS tags column in sync with the memory_tags table.
+            // Fires for every write path — add, update (delete-all + reinsert),
+            // and FK-cascade deletes — so application code never maintains the
+            // index by hand. The UPDATE is a no-op when the FTS row is already
+            // gone (memory delete cascades reach here after memories_after_delete).
+            try db.execute(sql: """
+                CREATE TRIGGER memory_tags_after_insert AFTER INSERT ON memory_tags BEGIN
+                    UPDATE memories_fts
+                    SET tags = COALESCE(
+                        (SELECT group_concat(tag, ' ') FROM memory_tags WHERE memory_id = NEW.memory_id), '')
+                    WHERE memory_id = NEW.memory_id;
+                END
+                """)
+
+            try db.execute(sql: """
+                CREATE TRIGGER memory_tags_after_delete AFTER DELETE ON memory_tags BEGIN
+                    UPDATE memories_fts
+                    SET tags = COALESCE(
+                        (SELECT group_concat(tag, ' ') FROM memory_tags WHERE memory_id = OLD.memory_id), '')
+                    WHERE memory_id = OLD.memory_id;
                 END
                 """)
 
