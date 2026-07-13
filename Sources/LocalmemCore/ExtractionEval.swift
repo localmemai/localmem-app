@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Eval harness (docs/Technical_Design.md §10 (eval harness)
+// MARK: - Eval harness (docs/Technical_Design.md section 10)
 //
 // Two prompts means two things to tune; without measurement, tuning is vibes.
 // The harness scores extract-only vs extract+verify on a golden fixture set so

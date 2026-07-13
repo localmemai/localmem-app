@@ -162,7 +162,7 @@ enum Migrations {
             // File connector: files the user imported from (one source per file),
             // per-file processing state (for change detection), and which memories
             // came from which file (for replace-all reconciliation).
-            // See docs/Technical_Design.md §10 (File connector).
+            // See docs/Technical_Design.md section 10 (File connector).
             try db.execute(sql: """
                 CREATE TABLE sources (
                     id TEXT PRIMARY KEY,
@@ -200,7 +200,7 @@ enum Migrations {
             try db.execute(sql: "CREATE INDEX idx_source_memories_file ON source_memories(source_id, rel_path)")
         }
 
-        // Two-pass extract → verify (docs/Technical_Design.md �10): the
+        // Two-pass extract → verify (docs/Technical_Design.md section 10): the
         // "N extracted → M kept" transparency counts. Nullable — rows processed
         // before the verify pass shipped simply have no counts.
         migrator.registerMigration("v2_extraction_counts") { db in

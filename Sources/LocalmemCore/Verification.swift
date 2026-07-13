@@ -6,7 +6,7 @@ import Foundation
 // judgment is a *reject* task. The verifier sees the source text plus every
 // surviving candidate in ONE batched call and returns a per-candidate verdict.
 // Nothing reaches the vault without passing verification.
-// See docs/Technical_Design.md §10.
+// See docs/Technical_Design.md section 10.
 
 /// Per-candidate verdict from the verify pass.
 public enum FactVerdict: Sendable, Equatable {

@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Limits
 
 /// Guardrails so one huge/pathological file can't hang the app, exhaust memory,
-/// flood the store, or run up agent cost. See docs/Technical_Design.md §10.
+/// flood the store, or run up agent cost. See docs/Technical_Design.md section 10.
 public enum ConnectorLimits {
     public static let maxFileSizeBytes = 20 * 1024 * 1024        // 20 MB — the PDF guard
     public static let maxTextChars = 1_000_000                    // ~1 MB of text per file
@@ -164,7 +164,7 @@ public protocol FactExtractor: Sendable {
 /// (`VerificationPrompt`) judges every candidate afterwards, so this prompt no
 /// longer carries the contradictory "be selective / extract EACH item" tension
 /// or the boilerplate blocklists — the deterministic filter and the verifier
-/// own precision now. See docs/Technical_Design.md �10.
+/// own precision now. See docs/Technical_Design.md section 10.
 public enum ExtractionPrompt {
     public static func build(text: String, context: ExtractionContext) -> String {
         """

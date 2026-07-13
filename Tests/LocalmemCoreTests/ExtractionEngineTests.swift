@@ -245,7 +245,7 @@ struct ExtractionEngineTests {
             content: "Page 2 of 5", type: .fact, tags: [])))
     }
 
-    // MARK: - Verify pass (docs/Technical_Design.md §10)
+    // MARK: - Verify pass (docs/Technical_Design.md section 10)
 
     @Test("Verifier verdicts are applied: keep stays, revise replaces, drop excludes")
     func verdictsAreApplied() async throws {

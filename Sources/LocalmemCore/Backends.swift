@@ -222,7 +222,7 @@ public struct AppleFoundationVerifier: FactVerifier {
 // MARK: - Backend ladder
 
 /// Extractor + verifier selection for a chosen backend. Same backend for both
-/// passes, permanently (docs/Technical_Design.md §10, resolved questions).
+/// passes, permanently (docs/Technical_Design.md section 10, resolved questions).
 public enum ExtractionBackends {
     public static func extractor(for backend: ExtractionBackend) -> FactExtractor {
         switch backend {
