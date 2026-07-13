@@ -3,7 +3,8 @@
 Status: **Designed, not yet built** · 2026-07-12 · Scope: LocalmemCore + app
 
 > Implement **after** the two-pass extraction work
-> ([Extraction_Quality_Design.md](Extraction_Quality_Design.md)) lands —
+> ([Technical_Design.md §10](Technical_Design.md#10-file-connector), shipped
+> with 1.0) lands —
 > notes are the content type the current prompt handles worst, and card-level
 > detection will drive real usage on day one. The implemented file connector
 > this builds on is specified in

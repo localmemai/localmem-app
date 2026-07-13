@@ -200,7 +200,7 @@ enum Migrations {
             try db.execute(sql: "CREATE INDEX idx_source_memories_file ON source_memories(source_id, rel_path)")
         }
 
-        // Two-pass extract → verify (docs/Extraction_Quality_Design.md): the
+        // Two-pass extract → verify (docs/Technical_Design.md �10): the
         // "N extracted → M kept" transparency counts. Nullable — rows processed
         // before the verify pass shipped simply have no counts.
         migrator.registerMigration("v2_extraction_counts") { db in

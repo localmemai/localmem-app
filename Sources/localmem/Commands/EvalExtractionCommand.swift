@@ -3,7 +3,7 @@ import Foundation
 import LocalmemCore
 
 /// Hidden dev harness for the two-pass extraction pipeline
-/// (docs/Extraction_Quality_Design.md). Hits a real backend, so it never runs
+/// (docs/Technical_Design.md §10). Hits a real backend, so it never runs
 /// in CI â€” run it manually whenever either prompt changes:
 ///
 ///     localmem eval-extraction --fixtures Tests/LocalmemCoreTests/Fixtures/extraction --backend claude-code

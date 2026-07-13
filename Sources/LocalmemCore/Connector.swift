@@ -164,7 +164,7 @@ public protocol FactExtractor: Sendable {
 /// (`VerificationPrompt`) judges every candidate afterwards, so this prompt no
 /// longer carries the contradictory "be selective / extract EACH item" tension
 /// or the boilerplate blocklists â€” the deterministic filter and the verifier
-/// own precision now. See docs/Extraction_Quality_Design.md.
+/// own precision now. See docs/Technical_Design.md §10.
 public enum ExtractionPrompt {
     public static func build(text: String, context: ExtractionContext) -> String {
         """

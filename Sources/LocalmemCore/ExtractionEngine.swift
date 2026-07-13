@@ -10,7 +10,7 @@ import Foundation
 ///
 /// Nothing reaches the vault without passing verification: a verify failure
 /// (timeout, error, unmappable output) fails the file with a retriable
-/// `verify_*` reason code. See docs/Extraction_Quality_Design.md.
+/// `verify_*` reason code. See docs/Technical_Design.md §10.
 public actor ExtractionEngine {
     private let memoryStore: MemoryStore
     private let sourceStore: SourceStore

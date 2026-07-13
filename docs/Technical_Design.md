@@ -352,11 +352,9 @@ The `localmem` command is the pro-user and debugging surface. It shares
 ## 10. File connector
 
 Import memories from files the user deliberately picks — implemented; this
-section is the source of truth (it absorbed `File_Connector_Design.md`).
-Extraction quality (two-pass extract → verify, implemented) is specified in
-[Extraction_Quality_Design.md](Extraction_Quality_Design.md); the planned
-Obsidian connector in
-[Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
+section is the source of truth (it absorbed `File_Connector_Design.md` and,
+once implemented, `Extraction_Quality_Design.md`). The planned Obsidian
+connector lives in [Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
 
 ### Model
 
@@ -369,8 +367,8 @@ Obsidian connector in
   duplicating it.
 - **No approval gate.** Extracted memories store directly (`source =
   "import"`, default-open access); curation happens afterwards in the detail
-  view (per-memory delete). Extraction quality is carried by the pipeline —
-  see the extraction-quality design.
+  view (per-memory delete). Extraction quality is carried by the two-pass
+  pipeline below.
 - **Non-blocking.** Imports queue through a cancellable 2-wide background
   runner (`ConnectorsViewModel`); the UI stays interactive with live
   per-file status. Stop drops queued files; the in-flight file finishes.
@@ -407,6 +405,37 @@ fails silently. Prompt tuning is measured, not vibes: golden fixtures under
 `Tests/LocalmemCoreTests/Fixtures/extraction/` and the hidden
 `localmem eval-extraction` dev harness score junk-kept / good-lost /
 duplicate rates for extract-only vs extract+verify.
+
+### Extraction quality — the two-pass design (settled)
+
+Why two passes: a single prompt is asked to do two opposing jobs —
+extraction is a *generate* task (rewarded for output → over-extracts),
+judgment is a *reject* task. Models judge candidates against criteria far
+better than they avoid generating them, so the jobs are split. Two
+load-bearing rules: **the verifier sees the source text** (grounding, not
+just form) and **verifies the set in one batched call** (per-document
+budget, duplicate detection, 1 extra invocation instead of N).
+
+The verifier is a strict curator with five hard gates — grounded, durable,
+owner-relevant (the owner *or their immediate world*), atomic &
+self-contained, non-transactional — and a soft budget of 3–10 memories per
+typical document. Verdict contract: `keep | revise | drop`, exactly one per
+candidate index; `revise` returns the repaired fact (field-wise fallback to
+the original) so a good fact with a bad title is fixed, not lost; `drop`
+carries a one-line reason that is debug-logged, never persisted.
+
+Settled decisions: same backend extracts and verifies (permanently — the
+task-framing split is the whole mechanism, cross-backend verification was
+rejected); verification is always on, no setting; partial/invalid verdict
+output fails the whole file (`verify_invalid_output`, retriable) — no
+silent per-candidate fallback; merge groups were cut from the contract (the
+verifier `drop`s near-duplicates with a reason naming the kept candidate);
+"N extracted" is the raw Pass-1 count, before deterministic filters;
+revisions are trusted (no grounding re-check).
+
+Remaining (v1.0.x/v1.1): on-device guided generation (`@Generable`) for
+both passes + per-chunk verification with chunking; vault-level dedup;
+recorded harness baselines.
 
 ### Schema
 
@@ -639,9 +668,9 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
   per-memory access control, file connector (§10), signed + notarized DMG via
   the tag-triggered release pipeline (§12).
 - **v1.1** — extraction quality: two-pass extract → verify + eval harness
-  ([design](Extraction_Quality_Design.md)) — **implemented**; remaining:
-  on-device guided generation + chunking, vault-level dedup. Obsidian
-  connector ([design](Obsidian_Connector_Design.md)).
+  (§10) — **implemented**; remaining: on-device guided generation +
+  chunking, vault-level dedup. Obsidian connector
+  ([design](Obsidian_Connector_Design.md)).
 - **v1.2** — Homebrew channel, Sparkle updates; improved tagging and
   organization.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
