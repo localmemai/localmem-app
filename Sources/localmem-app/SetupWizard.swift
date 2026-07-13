@@ -657,8 +657,13 @@ private struct WizardReviewScreen: View {
             } else {
                 ScrollView {
                     VStack(spacing: 6) {
+                        // Only installed agents — this screen is for decisions,
+                        // and a "Not installed" row offers none. The absent
+                        // ones get a one-line mention below instead.
                         ForEach($model.agents) { $agent in
-                            WizardAgentRow(agent: $agent, mode: model.mode)
+                            if agent.isInstalled {
+                                WizardAgentRow(agent: $agent, mode: model.mode)
+                            }
                         }
                         // The terminal is one more surface Localmem can hook
                         // into — decided here like any agent, executed in the
@@ -670,10 +675,21 @@ private struct WizardReviewScreen: View {
                         }
                     }
                 }
+
+                if !notInstalledNames.isEmpty {
+                    Text("Also supported, not detected: \(notInstalledNames). Re-run setup from Settings after installing one.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
         }
         .padding(28)
+    }
+
+    private var notInstalledNames: String {
+        model.agents.filter { !$0.isInstalled }.map(\.displayName).joined(separator: ", ")
     }
 }
 
@@ -739,18 +755,13 @@ private struct WizardAgentRow: View {
 
             Spacer()
 
-            if agent.isInstalled {
-                Toggle("", isOn: $agent.selected)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-            } else {
-                Pill(text: "Not installed", color: .secondary)
-            }
+            Toggle("", isOn: $agent.selected)
+                .toggleStyle(.switch)
+                .labelsHidden()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-        .opacity(agent.isInstalled ? 1 : 0.55)
     }
 }
 
