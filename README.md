@@ -16,8 +16,8 @@ all on your machine. Open source, macOS-native.
 
 </div>
 
-> **Status:** early and under active development. macOS-only, pre-1.0, and not
-> yet signed/notarized — for now, build from source (below).
+> **Status:** early and under active development. macOS-only, pre-1.0.
+> Signed & notarized builds are on the [releases page][releases].
 
 ---
 
@@ -83,10 +83,16 @@ Setup auto-detects and registers Localmem with:
 
 ## Getting started
 
-Localmem is macOS-only.
+Localmem is macOS-only (macOS 26+, Apple Silicon & Intel).
+
+**Download:** grab the signed, notarized DMG from the [releases page][releases]
+(or [localmem.ai][site]), drag Localmem to Applications, and launch. The setup
+wizard connects your installed AI clients and can add the `localmem` CLI to
+your PATH in one click.
+
+**Or build from source:**
 
 ```sh
-# Build from source
 git clone https://github.com/localmemai/localmem-app.git
 cd localmem-app
 swift build
@@ -99,9 +105,7 @@ Once setup finishes, restart your AI clients and they'll have Localmem
 available. Try telling one "remember that I prefer flat whites" — then ask a
 fresh session in another project what you like to drink.
 
-A packaged download is on the way: a signed DMG that bundles the app and both
-command-line tools, with a one-click option to add `localmem` to your PATH
-(Homebrew and a curl installer follow later). See [localmem.ai][site].
+Homebrew and a curl installer are planned as additional channels.
 
 ## CLI
 
@@ -141,5 +145,6 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 [mcp]: https://modelcontextprotocol.io
 [site]: https://localmem.ai
+[releases]: https://github.com/localmemai/localmem-app/releases/latest
 [grdb]: https://github.com/groue/GRDB.swift
 [swift-sdk]: https://github.com/modelcontextprotocol/swift-sdk
