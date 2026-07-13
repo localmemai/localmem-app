@@ -1,0 +1,59 @@
+# Release preflight — verify the signing/notary secrets WITHOUT releasing.
+#
+# Runs exactly the credential steps of release.yml and nothing else:
+# imports the Developer ID .p12 into an ephemeral keychain, asserts a
+# "Developer ID Application" identity is present, stores the App Store
+# Connect API key as a notary profile, and calls `notarytool history` to
+# prove the key authenticates against Apple's notary service.
+#
+# Trigger manually: gh workflow run release-preflight.yml
+
+name: Release preflight
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-credentials:
+    name: Verify signing & notary secrets
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/preflight.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::MACOS_CERT_P12_BASE64/PASSWORD: no Developer ID Application identity found"
+            exit 1
+          fi
+          echo "✅ Certificate OK — identity: $IDENTITY"
+
+      - name: Verify notary API key against Apple
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials preflight \
+            --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID"
+          rm -f "$RUNNER_TEMP/notary.p8"
+          # history requires a successful authenticated round-trip to Apple.
+          xcrun notarytool history --keychain-profile preflight | head -12
+          echo "✅ Notary API key OK — authenticated with Apple notary service"
