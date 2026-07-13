@@ -65,4 +65,28 @@ struct MemoryArchiveTests {
         #expect(json.contains("\"exportedAt\""))
         #expect(json.contains("\"memories\""))
     }
+
+    @Test func rejectsInvalidDateAsMalformed() throws {
+        // Envelope shape is fine; only the date string is broken — exercises
+        // the custom date-decoding error branch, not generic JSON parsing.
+        let json = """
+        {"schemaVersion": 1, "exportedAt": "not-a-date", "app": "Localmem", "memories": []}
+        """
+        #expect {
+            _ = try MemoryArchive.decode(Data(json.utf8))
+        } throws: { error in
+            guard case .malformed = error as? MemoryArchiveError else { return false }
+            return true
+        }
+    }
+
+    @Test func errorDescriptionsAreUserReadable() {
+        let malformed = MemoryArchiveError.malformed(underlying: CocoaError(.fileReadCorruptFile))
+        #expect(malformed.errorDescription == "This file isn't a valid Localmem export.")
+
+        let tooNew = MemoryArchiveError.unsupportedVersion(found: 9, supported: 1)
+        let description = tooNew.errorDescription ?? ""
+        #expect(description.contains("format 9"))
+        #expect(description.contains("supports up to 1"))
+    }
 }

@@ -54,7 +54,7 @@ struct LocalmemApp: App {
 // MARK: - Sections (Phase 2)
 
 enum AppSection: String, CaseIterable, Hashable {
-    case overview, memories, agents, access, audit
+    case overview, memories, agents, access, audit, connectors
 
     var label: String {
         switch self {
@@ -63,6 +63,7 @@ enum AppSection: String, CaseIterable, Hashable {
         case .agents:     "Agents"
         case .access:     "Access Roster"
         case .audit:      "Audit Log"
+        case .connectors: "Connectors"
         }
     }
 
@@ -73,6 +74,7 @@ enum AppSection: String, CaseIterable, Hashable {
         case .agents:     "person.crop.square"
         case .access:     "lock.shield"
         case .audit:      "list.bullet.rectangle"
+        case .connectors: "point.3.connected.trianglepath.dotted"
         }
     }
 }
@@ -184,6 +186,20 @@ enum AgentConfigurationInspector {
             instructionPath: instruction.map { home.appendingPathComponent($0.relativePath).path },
             hasInstructionImport: instructionInstalled
         )
+    }
+
+    /// How many known agents are currently fully configured — registered in
+    /// their MCP config, with the instruction import in place where the agent
+    /// supports one. Same definition as `AgentConfigurationState.statusText
+    /// == "Configured"`, so the overview stat card and the per-agent config
+    /// sheet can never disagree.
+    static func configuredAgentCount() -> Int {
+        KnownAgents.all.filter { agent in
+            guard let config = configURL(for: agent.id),
+                  isRegistered(agentID: agent.id, configURL: config) else { return false }
+            guard let instruction = instructionTarget(for: agent.id) else { return true }
+            return hasImportLine(relativePath: instruction.relativePath)
+        }.count
     }
 
     static func repairAll(resetImports: Bool = false) async throws -> String {
@@ -505,6 +521,7 @@ final class MemoryStoreViewModel {
 final class VaultStatusViewModel {
     private(set) var vaultLocked = false       // Driven by the Touch ID lock (Phase 13).
     private(set) var connectedAgents: [String] = []
+    private(set) var configuredAgents = 0
     private(set) var cloudSyncOn = false        // CloudKit arrives in Phase 14.
     private(set) var companionConnected = false // iPhone companion: future work.
     private(set) var lastActivity: Date?
@@ -524,7 +541,11 @@ final class VaultStatusViewModel {
     func refresh() async {
         let rows = (try? await activityStore.recent(limit: 50)) ?? []
         recentActivity = rows
-        connectedAgents = Array(Set(rows.compactMap(\.actorID))).sorted()
+        // Agents are MCP actors only — CLI rows carry the human "user" and the
+        // connector's "import" actor, which must not count as connected agents
+        // in the stat card or the status-bar agent list.
+        connectedAgents = Array(Set(rows.filter { $0.actorKind == .mcp }.compactMap(\.actorID))).sorted()
+        configuredAgents = AgentConfigurationInspector.configuredAgentCount()
         lastActivity    = rows.first?.occurredAt
         memoryCount     = (try? await memoryStore.count()) ?? 0
 
@@ -838,7 +859,6 @@ struct ContentView: View {
 struct SidebarRail: View {
     @Binding var section: AppSection
     @Binding var selectedComingSoon: ComingSoonFeature?
-    @State private var comingSoonExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -851,12 +871,14 @@ struct SidebarRail: View {
                         withAnimation(.snappy) { section = item }
                     }
                 }
+                // Unshipped features sit inline as ordinary rows with a "Soon"
+                // badge — a disclosure group is too much chrome for so few.
+                ForEach(ComingSoonFeature.allCases) { feature in
+                    ComingSoonNavItem(feature: feature, isActive: selectedComingSoon == feature) {
+                        selectedComingSoon = feature
+                    }
+                }
             }
-
-            ComingSoonSidebarGroup(
-                expanded: $comingSoonExpanded,
-                selected: $selectedComingSoon
-            )
 
             Spacer()
         }
@@ -866,61 +888,39 @@ struct SidebarRail: View {
     }
 }
 
-struct ComingSoonSidebarGroup: View {
-    @Binding var expanded: Bool
-    @Binding var selected: ComingSoonFeature?
+/// A sidebar row for a not-yet-shipped feature: styled like `NavItem`, plus a
+/// "Soon" pill. Opens the feature's coming-soon detail page.
+struct ComingSoonNavItem: View {
+    let feature: ComingSoonFeature
+    let isActive: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                withAnimation(.snappy) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "clock.badge")
-                        .frame(width: 18)
-                        .foregroundStyle(.secondary)
-                    Text("Coming Soon")
-                    Spacer(minLength: 0)
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 36)
-                .contentShape(Rectangle())
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Image(systemName: feature.symbol)
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text(feature.sidebarTitle)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("Soon")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(ComingSoonFeature.allCases) { feature in
-                        Button {
-                            selected = feature
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: feature.symbol)
-                                    .frame(width: 16)
-                                    .foregroundStyle(.secondary)
-                                Text(feature.sidebarTitle)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .font(.caption)
-                            .padding(.leading, 18)
-                            .padding(.trailing, 10)
-                            .frame(height: 30)
-                            .background(
-                                selected == feature ? Color.accentColor.opacity(0.14) : .clear,
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                            .foregroundStyle(selected == feature ? Color.accentColor : .primary)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(
+                isActive ? Color.accentColor.opacity(0.14) : .clear,
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .foregroundStyle(isActive ? Color.accentColor : .primary)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1184,6 +1184,8 @@ struct ContentArea: View {
                     AccessRulesView(statusVM: statusVM)
                 case .audit:
                     AuditLogView(memoryFilter: $auditMemoryFilter, onOpenMemory: onOpenAuditMemory)
+                case .connectors:
+                    ConnectorsCatalogView()
                 }
             }
         }
@@ -1281,36 +1283,33 @@ struct OverviewView: View {
 }
 
 enum ComingSoonFeature: String, CaseIterable, Identifiable {
+    // Connectors graduated from this "Coming Soon" group to its own section
+    // (AppSection.connectors); the catalog page hosts the still-coming sources.
     case syncCompanion
-    case connectors
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .syncCompanion: "iCloud sync + companion app"
-        case .connectors: "Connectors"
         }
     }
 
     var sidebarTitle: String {
         switch self {
         case .syncCompanion: "iCloud + Companion"
-        case .connectors: "Connectors"
         }
     }
 
     var subtitle: String {
         switch self {
         case .syncCompanion: "Private sync across your devices."
-        case .connectors: "Apple Notes, Obsidian, Markdown files, and more."
         }
     }
 
     var symbol: String {
         switch self {
         case .syncCompanion: "icloud.and.arrow.up"
-        case .connectors: "point.3.connected.trianglepath.dotted"
         }
     }
 
@@ -1318,8 +1317,6 @@ enum ComingSoonFeature: String, CaseIterable, Identifiable {
         switch self {
         case .syncCompanion:
             return "Sync your Localmem vault through iCloud and capture memories from a lightweight companion app while keeping the human in control of approval and access."
-        case .connectors:
-            return "Connect selected sources like Apple Notes, Obsidian vaults, Markdown folders, and other local files with explicit review before anything becomes memory."
         }
     }
 }
@@ -1377,8 +1374,6 @@ struct FeaturePreviewBullets: View {
         switch feature {
         case .syncCompanion:
             return ["iCloud-backed device sync", "Companion capture flow", "Approval-first privacy controls"]
-        case .connectors:
-            return ["Apple Notes ingestion", "Obsidian and Markdown folder support", "Explicit review before memory creation"]
         }
     }
 
@@ -1440,8 +1435,8 @@ struct StatsStrip: View {
         HStack(spacing: 12) {
             StatCard(value: "\(statusVM?.memoryCount ?? 0)",
                      label: "Memories")
-            StatCard(value: "\(statusVM?.connectedAgents.count ?? 0)",
-                     label: "Agents")
+            StatCard(value: "\(statusVM?.configuredAgents ?? 0)",
+                     label: "Agents configured")
             StatCard(value: "\(statusVM?.accessesToday ?? 0)",
                      label: "Accesses today")
             StatCard(value: "\(statusVM?.blockedCount ?? 0)",
@@ -1987,7 +1982,7 @@ struct MemoryEditorView: View {
                             }
                             .padding(.leading, 5)
 
-                            TextField("Tags (comma separated)", text: $tagsInput)
+                            TextField("Tags — optional, comma separated (help search find this later)", text: $tagsInput)
                                 .textFieldStyle(.roundedBorder)
 
                             VStack(alignment: .leading, spacing: 6) {
@@ -2119,9 +2114,6 @@ struct MemoryEditorView: View {
     private var validationMessage: String? {
         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Title is required."
-        }
-        if cleanedTags.isEmpty {
-            return "Add at least one tag."
         }
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Memory details are required."
