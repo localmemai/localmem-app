@@ -662,6 +662,7 @@ private struct WizardAgentRow: View {
 
 private struct WizardRunScreen: View {
     @Bindable var model: SetupWizardModel
+    @State private var showDetails = false
 
     private var agentRows: [WizardRunRow] { model.runRows.filter { $0.kind == .agent } }
     private var instructionRows: [WizardRunRow] { model.runRows.filter { $0.kind == .instruction } }
@@ -678,19 +679,14 @@ private struct WizardRunScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            // One scroll region for the whole result set — the per-agent rows,
-            // the summary chips, and the cards — so the list isn't squeezed into a
-            // tiny nested scroll by the cards below it on the fixed-height window.
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if !agentRows.isEmpty {
-                        WizardRunSection(title: "Agents", rows: agentRows)
-                    }
-                    if !instructionRows.isEmpty {
-                        WizardRunSection(title: "Instructions", rows: instructionRows)
-                    }
-
                     if model.runComplete {
+                        // Actions first: on the fixed 520pt sheet the next
+                        // steps (CLI install, try-it prompt) must sit above the
+                        // fold, or users never discover them — the per-agent
+                        // result rows are transient detail once everything ran,
+                        // so they collapse into a disclosure below.
                         HStack(spacing: 14) {
                             summaryChip("\(model.connectedCount) connected", .green)
                             if model.disconnectedCount > 0 { summaryChip("\(model.disconnectedCount) disconnected", .orange) }
@@ -698,13 +694,42 @@ private struct WizardRunScreen: View {
                         }
                         CLIToolCard()
                         TryItPromptCard()
+
+                        DisclosureGroup(isExpanded: $showDetails) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                if !agentRows.isEmpty {
+                                    WizardRunSection(title: "Agents", rows: agentRows)
+                                }
+                                if !instructionRows.isEmpty {
+                                    WizardRunSection(title: "Instructions", rows: instructionRows)
+                                }
+                            }
+                            .padding(.top, 10)
+                        } label: {
+                            Text("Setup details")
+                                .font(.callout.weight(.medium))
+                        }
+                        .padding(.top, 2)
+                    } else {
+                        if !agentRows.isEmpty {
+                            WizardRunSection(title: "Agents", rows: agentRows)
+                        }
+                        if !instructionRows.isEmpty {
+                            WizardRunSection(title: "Instructions", rows: instructionRows)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.visible)
         }
         .padding(28)
         .onAppear { model.startRun() }
+        // Anything less than a full success deserves immediate visibility —
+        // auto-expand the details when something failed or was disconnected.
+        .onChange(of: model.runComplete) { _, complete in
+            if complete { showDetails = model.failedCount > 0 || model.disconnectedCount > 0 }
+        }
     }
 
     private func summaryChip(_ text: String, _ color: Color) -> some View {
