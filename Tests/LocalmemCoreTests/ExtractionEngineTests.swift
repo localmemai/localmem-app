@@ -22,6 +22,41 @@ private final class CountingExtractor: FactExtractor, @unchecked Sendable {
     }
 }
 
+/// Default Pass-2 stand-in: verifies everything as-is.
+private struct KeepAllVerifier: FactVerifier {
+    func verify(candidates: [ExtractedFact], against text: String,
+                context: ExtractionContext) async throws -> [FactVerdict] {
+        candidates.map { _ in .keep }
+    }
+}
+
+/// Returns a fixed verdict list regardless of candidates.
+private struct FixedVerifier: FactVerifier {
+    let verdicts: [FactVerdict]
+    func verify(candidates: [ExtractedFact], against text: String,
+                context: ExtractionContext) async throws -> [FactVerdict] {
+        verdicts
+    }
+}
+
+private struct ThrowingVerifier: FactVerifier {
+    let error: Error
+    func verify(candidates: [ExtractedFact], against text: String,
+                context: ExtractionContext) async throws -> [FactVerdict] {
+        throw error
+    }
+}
+
+/// Records whether the verify pass ran at all.
+private final class CountingVerifier: FactVerifier, @unchecked Sendable {
+    var calls = 0
+    func verify(candidates: [ExtractedFact], against text: String,
+                context: ExtractionContext) async throws -> [FactVerdict] {
+        calls += 1
+        return candidates.map { _ in .keep }
+    }
+}
+
 @Suite("ExtractionEngine")
 struct ExtractionEngineTests {
     private func makeStores() throws -> (MemoryStore, SourceStore) {
@@ -59,6 +94,7 @@ struct ExtractionEngineTests {
         let state = await engine.process(
             source: source,
             extractor: MockExtractor(facts: [fact("One", "Fact one."), fact("Two", "Fact two.")]),
+            verifier: KeepAllVerifier(),
             force: true)
 
         #expect(state?.status == .processed)
@@ -79,14 +115,14 @@ struct ExtractionEngineTests {
 
         _ = await engine.process(source: source,
             extractor: MockExtractor(facts: [fact("A", "A."), fact("B", "B."), fact("C", "C.")]),
-            force: true)
+            verifier: KeepAllVerifier(), force: true)
         #expect(try await memoryStore.count() == 3)
 
         // Change the file so the hash differs, then reprocess with fewer facts.
         try "v2".write(to: url, atomically: true, encoding: .utf8)
         _ = await engine.process(source: source,
             extractor: MockExtractor(facts: [fact("Z", "Z.")]),
-            force: false)
+            verifier: KeepAllVerifier(), force: false)
         #expect(try await memoryStore.count() == 1)
         #expect(try await memoryStore.all().first?.content == "Z.")
     }
@@ -100,8 +136,8 @@ struct ExtractionEngineTests {
         let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
         let extractor = CountingExtractor()
 
-        _ = await engine.process(source: source, extractor: extractor, force: true)
-        let second = await engine.process(source: source, extractor: extractor, force: false)
+        _ = await engine.process(source: source, extractor: extractor, verifier: KeepAllVerifier(), force: true)
+        let second = await engine.process(source: source, extractor: extractor, verifier: KeepAllVerifier(), force: false)
 
         #expect(extractor.calls == 1)
         #expect(second?.status == .processed)     // previous state is returned
@@ -116,7 +152,8 @@ struct ExtractionEngineTests {
         try await sourceStore.add(source)
         let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
 
-        let state = await engine.process(source: source, extractor: ThrowingExtractor(), force: true)
+        let state = await engine.process(source: source, extractor: ThrowingExtractor(),
+                                         verifier: KeepAllVerifier(), force: true)
         #expect(state?.status == .failed)
         #expect(state?.reasonCode == "extractor_error")
         #expect(try await memoryStore.count() == 0)
@@ -134,7 +171,7 @@ struct ExtractionEngineTests {
 
         let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
         let state = await engine.process(source: source,
-            extractor: MockExtractor(facts: [fact("A", "A.")]), force: true)
+            extractor: MockExtractor(facts: [fact("A", "A.")]), verifier: KeepAllVerifier(), force: true)
 
         #expect(state?.status == .failed)
         #expect(state?.reasonCode == "missing")
@@ -150,7 +187,7 @@ struct ExtractionEngineTests {
 
         let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
         let state = await engine.process(source: source,
-            extractor: MockExtractor(facts: [fact("A", "A.")]), force: true)
+            extractor: MockExtractor(facts: [fact("A", "A.")]), verifier: KeepAllVerifier(), force: true)
 
         #expect(state?.status == .skipped)
         #expect(state?.reasonCode == "unsupported")
@@ -167,7 +204,7 @@ struct ExtractionEngineTests {
 
         let task = Task {
             await engine.process(source: source,
-                extractor: MockExtractor(facts: [fact("A", "A.")]), force: true)
+                extractor: MockExtractor(facts: [fact("A", "A.")]), verifier: KeepAllVerifier(), force: true)
         }
         task.cancel()
         let state = await task.value
@@ -192,7 +229,7 @@ struct ExtractionEngineTests {
             ExtractedFact(title: "Roll No.", content: "Roll No.", type: .fact, tags: []),  // label-only
         ]
         let state = await engine.process(source: source,
-            extractor: MockExtractor(facts: facts), force: true)
+            extractor: MockExtractor(facts: facts), verifier: KeepAllVerifier(), force: true)
 
         #expect(state?.factCount == 1)
         #expect(try await memoryStore.all().first?.content == "Is enrolled at IIT Kharagpur.")
@@ -206,5 +243,140 @@ struct ExtractionEngineTests {
             content: "Signature of Vidit Gupta.", type: .fact, tags: [])))
         #expect(BoilerplateFilter.isBoilerplate(ExtractedFact(title: "Footer",
             content: "Page 2 of 5", type: .fact, tags: [])))
+    }
+
+    // MARK: - Verify pass (docs/Extraction_Quality_Design.md)
+
+    @Test("Verifier verdicts are applied: keep stays, revise replaces, drop excludes")
+    func verdictsAreApplied() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("v.md", "content")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let repaired = ExtractedFact(title: "Coffee preference",
+            content: "Prefers flat white with oat milk.", type: .preference, tags: ["coffee"])
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: [
+                fact("Keep me", "A durable fact."),
+                fact("Coffee: flat white", "flat white oat milk"),
+                fact("Page header", "A transactional line item."),
+            ]),
+            verifier: FixedVerifier(verdicts: [
+                .keep,
+                .revise(repaired),
+                .drop(reason: "transactional"),
+            ]),
+            force: true)
+
+        #expect(state?.status == .processed)
+        #expect(state?.factCount == 2)
+        let contents = Set(try await memoryStore.all().map(\.content))
+        #expect(contents == ["A durable fact.", "Prefers flat white with oat milk."])
+    }
+
+    @Test("Extracted/kept counts are recorded: raw Pass-1 count → stored count")
+    func countsAreRecorded() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("c.md", "content")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        // 3 raw candidates; one is boilerplate (filtered deterministically,
+        // never reaches the verifier), one is dropped by the verifier.
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: [
+                fact("A", "First real fact."),
+                fact("B", "Second real fact."),
+                ExtractedFact(title: "Roll No.", content: "Roll No.", type: .fact, tags: []),
+            ]),
+            verifier: FixedVerifier(verdicts: [.keep, .drop(reason: "not durable")]),
+            force: true)
+
+        #expect(state?.extractedCount == 3)
+        #expect(state?.keptCount == 1)
+        #expect(state?.factCount == 1)
+
+        // And the counts round-trip through the store.
+        let persisted = try await sourceStore.listFileStates(sourceID: source.id).first
+        #expect(persisted?.extractedCount == 3)
+        #expect(persisted?.keptCount == 1)
+    }
+
+    @Test("A verifier failure fails the file retriably — no unverified facts stored")
+    func verifierFailureFailsFile() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("vf.md", "content")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: [fact("A", "A real fact.")]),
+            verifier: ThrowingVerifier(error: ExtractionError.failed("model hiccup")),
+            force: true)
+
+        #expect(state?.status == .failed)
+        #expect(state?.reasonCode == "verify_error")
+        #expect(try await memoryStore.count() == 0)
+    }
+
+    @Test("Unmappable verifier output fails the file with verify_invalid_output")
+    func invalidVerifierOutputFailsFile() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("vi.md", "content")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        // Two candidates, one verdict → the count guard must fail the file.
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: [fact("A", "First fact."), fact("B", "Second fact.")]),
+            verifier: FixedVerifier(verdicts: [.keep]),
+            force: true)
+
+        #expect(state?.status == .failed)
+        #expect(state?.reasonCode == "verify_invalid_output")
+        #expect(try await memoryStore.count() == 0)
+    }
+
+    @Test("An empty candidate set is a valid processed outcome and skips the verify call")
+    func emptyCandidatesSkipVerifier() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("empty.md", "nothing memorable")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+        let verifier = CountingVerifier()
+
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: []), verifier: verifier, force: true)
+
+        #expect(state?.status == .processed)
+        #expect(state?.extractedCount == 0)
+        #expect(state?.keptCount == 0)
+        #expect(verifier.calls == 0)
+        #expect(try await memoryStore.count() == 0)
+    }
+
+    @Test("All candidates dropped by the verifier is still a processed file")
+    func allDroppedIsProcessed() async throws {
+        let (memoryStore, sourceStore) = try makeStores()
+        let url = try makeFile("junk.md", "content")
+        let source = makeSource(url)
+        try await sourceStore.add(source)
+        let engine = ExtractionEngine(memoryStore: memoryStore, sourceStore: sourceStore)
+
+        let state = await engine.process(source: source,
+            extractor: MockExtractor(facts: [fact("A", "Junk one."), fact("B", "Junk two.")]),
+            verifier: FixedVerifier(verdicts: [.drop(reason: "junk"), .drop(reason: "junk")]),
+            force: true)
+
+        #expect(state?.status == .processed)
+        #expect(state?.extractedCount == 2)
+        #expect(state?.keptCount == 0)
+        #expect(try await memoryStore.count() == 0)
     }
 }

@@ -58,6 +58,12 @@ let package = Package(
             dependencies: [
                 "LocalmemCore",
                 .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            resources: [
+                // Golden documents + expected sets for the extraction eval
+                // harness (`localmem eval-extraction`); the deterministic
+                // loader/scorer tests read them from the bundle.
+                .copy("Fixtures"),
             ]
         ),
         .testTarget(

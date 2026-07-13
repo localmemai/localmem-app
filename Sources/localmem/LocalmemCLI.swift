@@ -17,6 +17,7 @@ struct LocalmemCLI: AsyncParsableCommand {
             SetupCommand.self,
             StatusCommand.self,
             PathCommand.self,
+            EvalExtractionCommand.self,   // hidden dev harness
         ],
         defaultSubcommand: ListCommand.self
     )

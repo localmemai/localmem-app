@@ -10,13 +10,23 @@ struct MigrationsTests {
             .appendingPathComponent("lm-mig-\(UUID().uuidString).sqlite3")
     }
 
-    @Test("a fresh database applies exactly the consolidated v1_initial")
-    func freshDatabaseAppliesConsolidatedV1() async throws {
+    @Test("a fresh database applies the consolidated v1 plus the counts migration")
+    func freshDatabaseAppliesMigrations() async throws {
         let db = try LocalmemDatabase(url: tempURL())
         let applied = try await db.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
-        #expect(applied == ["v1_initial"])
+        #expect(applied == ["v1_initial", "v2_extraction_counts"])
+    }
+
+    @Test("v2 adds the nullable extraction-count columns to source_files")
+    func v2AddsExtractionCounts() async throws {
+        let db = try LocalmemDatabase(url: tempURL())
+        let columns = try await db.read { db in
+            Set(try Row.fetchAll(db, sql: "PRAGMA table_info(source_files)").map { $0["name"] as String })
+        }
+        #expect(columns.contains("extracted_count"))
+        #expect(columns.contains("kept_count"))
     }
 
     @Test("v1_initial creates the full launch schema")

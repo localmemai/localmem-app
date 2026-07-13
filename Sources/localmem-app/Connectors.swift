@@ -36,8 +36,10 @@ private let connectorCatalog: [ConnectorType] = [
 ]
 
 struct ConnectorsCatalogView: View {
-    @State private var vm: ConnectorsViewModel? = try? ConnectorsViewModel()
-    @State private var showDetail = false
+    /// Injected from the app shell. The VM outlives this view on purpose —
+    /// it owns the import queue and in-flight state, so navigating away and
+    /// back must not reset it (the spinner keeps spinning).
+    let vm: ConnectorsViewModel?
     @State private var detecting = false
     @State private var backendChoices: [BackendChoice] = []
     @State private var choosingBackend = false
@@ -47,10 +49,10 @@ struct ConnectorsCatalogView: View {
 
     var body: some View {
         Group {
-            if showDetail, let vm {
+            if let vm, vm.showingDetail {
                 ConnectorDetailView(
                     vm: vm,
-                    onBack: { showDetail = false },
+                    onBack: { vm.showingDetail = false },
                     onAddFiles: startImport
                 )
             } else {
@@ -88,9 +90,10 @@ struct ConnectorsCatalogView: View {
                                 connector: connector,
                                 fileCount: vm?.sources.count ?? 0,
                                 factCount: vm?.factCount ?? 0,
+                                importing: vm?.isRunning ?? false,
                                 importDisabled: detecting,
                                 onImport: startImport,
-                                onManage: { showDetail = true }
+                                onManage: { vm?.showingDetail = true }
                             )
                         } else {
                             ConnectorCard(connector: connector)
@@ -153,7 +156,7 @@ struct ConnectorsCatalogView: View {
         panel.message = "Choose the files to import memories from (Text, Markdown, or PDF)."
         guard panel.runModal() == .OK, !panel.urls.isEmpty, let vm else { return }
         Task { await vm.importFiles(urls: panel.urls, backend: backend) }
-        showDetail = true
+        vm.showingDetail = true
     }
 
     private static var allowedTypes: [UTType] {
@@ -234,6 +237,7 @@ private struct ConnectorCard: View {
     let connector: ConnectorType
     var fileCount: Int = 0
     var factCount: Int = 0
+    var importing: Bool = false
     var importDisabled: Bool = false
     var onImport: () -> Void = {}
     var onManage: () -> Void = {}
@@ -277,8 +281,19 @@ private struct ConnectorCard: View {
             }
 
             if connected {
-                Text("^[\(fileCount) file](inflect: true) · \(factCount) facts")
-                    .font(.caption).foregroundStyle(.secondary)
+                if importing {
+                    // A run is in flight (possibly started before the user
+                    // navigated away) — surface it on the catalog too, so the
+                    // animated indicator is visible the whole time, not just
+                    // inside the detail view.
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Importing…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("^[\(fileCount) file](inflect: true) · \(factCount) facts")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack(spacing: 8) {
                     Button(action: onImport) { Label("Import…", systemImage: "plus") }
                         .buttonStyle(.borderedProminent)

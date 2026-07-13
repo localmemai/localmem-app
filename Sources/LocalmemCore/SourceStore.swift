@@ -88,14 +88,15 @@ public final class SourceStore: Sendable {
             try db.execute(
                 sql: """
                     INSERT OR REPLACE INTO source_files
-                    (source_id, rel_path, content_sha256, modified_at, processed_at, status, reason_code, error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (source_id, rel_path, content_sha256, modified_at, processed_at, status, reason_code, error, extracted_count, kept_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     sourceID.uuidString, state.relPath, state.contentSHA256,
                     state.modifiedAt.map(DateFormat.iso8601.string(from:)),
                     state.processedAt.map(DateFormat.iso8601.string(from:)),
                     state.status.rawValue, state.reasonCode, state.error,
+                    state.extractedCount, state.keptCount,
                 ]
             )
         }
@@ -119,7 +120,9 @@ public final class SourceStore: Sendable {
                     status: SourceFileState.Status(rawValue: row["status"]) ?? .failed,
                     reasonCode: row["reason_code"],
                     error: row["error"],
-                    factCount: facts
+                    factCount: facts,
+                    extractedCount: row["extracted_count"],
+                    keptCount: row["kept_count"]
                 )
             }
         }

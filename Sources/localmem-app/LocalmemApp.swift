@@ -42,12 +42,65 @@ struct LocalmemApp: App {
         }
     }
 
+    @AppStorage("appearance") private var appearance = AppAppearance.system.rawValue
+
     var body: some Scene {
         WindowGroup("Localmem") {
             ContentView()
                 .frame(minWidth: 1100, minHeight: 700)
+                .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
+
+        // Standard macOS Settings window (⌘,) — currently just the theme
+        // picker. The LOCALMEM_APPEARANCE env hook above still wins when set
+        // (it pins NSApplication.appearance, which overrides the per-window
+        // color scheme) so screenshot tooling stays deterministic.
+        Settings {
+            SettingsView()
+        }
+    }
+}
+
+// MARK: - Appearance
+
+/// User-selectable theme. `system` follows the OS; the raw value is persisted
+/// via @AppStorage("appearance").
+enum AppAppearance: String, CaseIterable {
+    case system, light, dark
+
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light:  "Light"
+        case .dark:   "Dark"
+        }
+    }
+
+    /// nil = follow the system appearance.
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light:  .light
+        case .dark:   .dark
+        }
+    }
+}
+
+struct SettingsView: View {
+    @AppStorage("appearance") private var appearance = AppAppearance.system.rawValue
+
+    var body: some View {
+        Form {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppAppearance.allCases, id: \.rawValue) { choice in
+                    Text(choice.label).tag(choice.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }
 
@@ -595,6 +648,11 @@ struct ContentView: View {
     // rather than crashing. Each VM is optional all the way down.
     @State private var memoryVM: MemoryStoreViewModel? = try? MemoryStoreViewModel()
     @State private var statusVM: VaultStatusViewModel? = try? VaultStatusViewModel()
+    // Owned here, not by the Connectors section view: the import queue and
+    // per-file "processing" state live in this VM, and a section-scoped @State
+    // would discard them on every navigation — leaving an in-flight import
+    // with no spinner and a stale file list when the user comes back.
+    @State private var connectorsVM: ConnectorsViewModel? = try? ConnectorsViewModel()
     @State private var sidebarCollapsed = false
     @FocusState private var searchFocused: Bool
     @AppStorage("seenWizard") private var seenWizard = false
@@ -641,6 +699,7 @@ struct ContentView: View {
                         section: section,
                         memoryVM: memoryVM,
                         statusVM: statusVM,
+                        connectorsVM: connectorsVM,
                         selectedComingSoon: selectedComingSoon,
                         memorySelection: $memorySelection,
                         onEditMemory: { memory in sheet = .editMemory(memory) },
@@ -1143,6 +1202,7 @@ struct ContentArea: View {
     let section: AppSection
     let memoryVM: MemoryStoreViewModel?
     let statusVM: VaultStatusViewModel?
+    let connectorsVM: ConnectorsViewModel?
     let selectedComingSoon: ComingSoonFeature?
     @Binding var memorySelection: Memory.ID?
     let onEditMemory: (Memory) -> Void
@@ -1185,7 +1245,7 @@ struct ContentArea: View {
                 case .audit:
                     AuditLogView(memoryFilter: $auditMemoryFilter, onOpenMemory: onOpenAuditMemory)
                 case .connectors:
-                    ConnectorsCatalogView()
+                    ConnectorsCatalogView(vm: connectorsVM)
                 }
             }
         }

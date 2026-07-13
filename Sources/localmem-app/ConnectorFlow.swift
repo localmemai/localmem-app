@@ -17,6 +17,10 @@ final class ConnectorsViewModel {
     private(set) var states: [UUID: SourceFileState] = [:]
     private(set) var processing: Set<UUID> = []
     var loadError: String?
+    /// Whether the Connectors section shows the file-detail split view or the
+    /// catalog. Lives here (not view @State) so navigating to another section
+    /// and back restores exactly what the user was looking at.
+    var showingDetail = false
 
     private var queue: [(source: ImportSource, force: Bool)] = []
     private var worker: Task<Void, Never>?
@@ -42,12 +46,15 @@ final class ConnectorsViewModel {
 
     func refresh() async {
         do {
-            sources = try await sourceStore.list()
+            let latest = try await sourceStore.list()
             var next: [UUID: SourceFileState] = [:]
-            for source in sources {
+            for source in latest {
                 next[source.id] = try await sourceStore.listFileStates(sourceID: source.id).first
             }
-            states = next
+            // Only publish real changes — refresh is now polled every 2s, and
+            // reassigning identical values would re-render the section per tick.
+            if latest != sources { sources = latest }
+            if next != states { states = next }
         } catch is CancellationError {
             // A cancelled refresh (Stop pressed) is not an error to surface.
         } catch {
@@ -140,8 +147,9 @@ final class ConnectorsViewModel {
         while !Task.isCancelled, let next = dequeue() {
             processing.insert(next.source.id)
             let extractor = ConnectorBackends.extractor(for: next.source.backend)
+            let verifier = ConnectorBackends.verifier(for: next.source.backend)
             if let state = await engine.process(
-                source: next.source, extractor: extractor, force: next.force) {
+                source: next.source, extractor: extractor, verifier: verifier, force: next.force) {
                 states[next.source.id] = state
             }
             processing.remove(next.source.id)
@@ -195,8 +203,18 @@ struct ConnectorDetailView: View {
             }
         }
         .task {
+            // Poll while visible — auto-cancels on view disappear. File states
+            // are also written by other Localmem processes sharing the DB
+            // (a second app instance, future CLI-driven imports), and a
+            // one-shot refresh leaves those stale until the user re-navigates.
+            // Same pattern as the memory-list polling in LocalmemApp;
+            // in-instance updates stay immediate via @Observable.
             await vm.refresh()
             if selection == nil { selection = vm.sources.first?.id }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                await vm.refresh()
+            }
         }
     }
 
@@ -458,6 +476,15 @@ private struct FileDetailPane: View {
             GridRow {
                 Text("Last processed").foregroundStyle(.secondary)
                 Text(state?.processedAt.map(Self.relative) ?? "—")
+            }
+            // "N extracted → M kept" — the verify pass's transparency line.
+            // Trust feature; also surfaces an over-aggressive verifier
+            // immediately. Absent on rows processed before the pass shipped.
+            if let extracted = state?.extractedCount, let kept = state?.keptCount {
+                GridRow {
+                    Text("Curation").foregroundStyle(.secondary)
+                    Text("\(extracted) extracted → \(kept) kept")
+                }
             }
         }
         .font(.callout)

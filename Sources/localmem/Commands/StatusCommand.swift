@@ -47,31 +47,36 @@ struct StatusCommand: AsyncParsableCommand {
         ]
 
         for r in registrars {
-            let line: String
-            if !r.isInstalled() {
-                line = "– not installed"
-            } else if !r.isRegistered() {
-                line = "✗ installed but NOT registered — run `localmem setup`"
-            } else {
-                let registrationDetail: String
-                if let path = r.registeredBinaryPath() {
-                    registrationDetail = path == canonical
-                        ? "✓ registered · path OK"
-                        : "↺ registered · path STALE — run `localmem setup`"
-                } else {
-                    registrationDetail = "✓ registered · path unknown"
-                }
-                line = "\(registrationDetail) · \(preauthLabel(for: r))"
-            }
             let name = r.displayName.padding(toLength: 18, withPad: " ", startingAt: 0)
-            print("  \(name) \(line)")
+            print("  \(name) \(Self.statusLine(for: r, canonical: canonical))")
         }
 
         print("")
         print("Canonical binary: \(canonical)")
     }
 
-    private func preauthLabel(for registrar: ClientRegistrar) -> String {
+    /// One client's status line: install → registration → path health → pre-auth.
+    /// Static and registrar-injected so tests can drive it with fakes, matching
+    /// the `SetupCommand.processClient` seam.
+    static func statusLine(for r: ClientRegistrar, canonical: String) -> String {
+        if !r.isInstalled() {
+            return "– not installed"
+        }
+        if !r.isRegistered() {
+            return "✗ installed but NOT registered — run `localmem setup`"
+        }
+        let registrationDetail: String
+        if let path = r.registeredBinaryPath() {
+            registrationDetail = path == canonical
+                ? "✓ registered · path OK"
+                : "↺ registered · path STALE — run `localmem setup`"
+        } else {
+            registrationDetail = "✓ registered · path unknown"
+        }
+        return "\(registrationDetail) · \(preauthLabel(for: r))"
+    }
+
+    static func preauthLabel(for registrar: ClientRegistrar) -> String {
         switch registrar.preauthorizationState(tools: Localmem.preauthorizedToolNames) {
         case .authorized:           return "auto-approved"
         case .partial(let missing): return "auto-approved (partial, \(missing) missing — re-run setup)"

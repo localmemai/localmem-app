@@ -353,9 +353,9 @@ The `localmem` command is the pro-user and debugging surface. It shares
 
 Import memories from files the user deliberately picks — implemented; this
 section is the source of truth (it absorbed `File_Connector_Design.md`).
-Planned successors live in their own design docs:
-[Extraction_Quality_Design.md](Extraction_Quality_Design.md) (two-pass
-extract → verify) and
+Extraction quality (two-pass extract → verify, implemented) is specified in
+[Extraction_Quality_Design.md](Extraction_Quality_Design.md); the planned
+Obsidian connector in
 [Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
 
 ### Model
@@ -381,31 +381,42 @@ Ladder: **Apple Foundation Models (on-device, preferred) → a CLI-capable
 configured agent (Claude Code, Codex) → unavailable.** Localmem never calls a
 model API or holds a key. The backend is chosen *before* file selection (with
 disclosure when an agent backend reads the files); there is **no silent
-fallback** from on-device to agent. Agent invocations are headless and
-injection-hardened: imported text is untrusted, so the CLI runs as a pure
-text→text call with tools disabled and MCP config stripped
-(`AgentCLIExtractor`).
+fallback** from on-device to agent. The extract and verify passes share the
+same backend, always. Agent invocations are headless and injection-hardened:
+imported text is untrusted, so the CLI runs as a pure text→text call with
+tools disabled and MCP config stripped (`AgentCLIInvocation`, used by both
+`AgentCLIExtractor` and `AgentCLIVerifier`). The backend implementations live
+in `LocalmemCore/Backends.swift`, shared by the app and the eval harness.
 
 ### Engine & reconciliation
 
-`ExtractionEngine.process(source:extractor:force:)` handles one file:
-read → hash-based change detection (unchanged files skip extraction unless
-forced) → extract → deterministic `BoilerplateFilter` + within-file dedup →
-**replace-all for that file in a single audited transaction**
-(`SourceStore.replaceMemories`). Per-file limits (20 MB pre-read size gate,
-~1 MB text, 200 facts, 180 s timeout) and every skip/failure end in a
-`status` + plain-language reason (`missing`, `unsupported`, `too_large`,
-`no_text`, `timeout`, …) — nothing fails silently.
+`ExtractionEngine.process(source:extractor:verifier:force:)` handles one
+file: read → hash-based change detection (unchanged files skip extraction
+unless forced) → **Pass 1 extract** (liberal) → deterministic
+`BoilerplateFilter` + within-file dedup → **Pass 2 verify** (strict curator;
+one batched call judging every candidate against the source text; verdicts
+`keep | revise | drop`) → **replace-all for that file in a single audited
+transaction** (`SourceStore.replaceMemories`). Nothing reaches the vault
+without passing verification: a verify failure fails the file retriably
+(`verify_timeout`, `verify_error`, `verify_invalid_output`), and the
+"N extracted → M kept" counts persist per file for the detail pane. Per-file
+limits (20 MB pre-read size gate, ~1 MB text, 200 facts, 180 s timeout per
+pass) and every skip/failure end in a `status` + plain-language reason
+(`missing`, `unsupported`, `too_large`, `no_text`, `timeout`, …) — nothing
+fails silently. Prompt tuning is measured, not vibes: golden fixtures under
+`Tests/LocalmemCoreTests/Fixtures/extraction/` and the hidden
+`localmem eval-extraction` dev harness score junk-kept / good-lost /
+duplicate rates for extract-only vs extract+verify.
 
 ### Schema
 
 `sources` (one row per imported file: path, bookmark, backend, last_run_at),
-`source_files` (per-file hash/mtime/status/reason for change detection), and
+`source_files` (per-file hash/mtime/status/reason for change detection, plus
+nullable `extracted_count`/`kept_count` added by `v2_extraction_counts`), and
 `source_memories` (file → memory links that make replace-all possible), with
-`ON DELETE CASCADE` throughout. Created by `v3_sources`;
-`v4_sources_drop_legacy_columns` drops the folder-era columns
-(kind/auto_process/status) from databases that ran the original v3 — the
-lesson: **never edit an applied migration in place.**
+`ON DELETE CASCADE` throughout. The base tables ship in the consolidated
+`v1_initial`; every post-launch schema change is a new appended migration —
+the standing lesson: **never edit an applied migration in place.**
 
 ### UI
 
@@ -628,8 +639,9 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
   per-memory access control, file connector (§10), signed + notarized DMG via
   the tag-triggered release pipeline (§12).
 - **v1.1** — extraction quality: two-pass extract → verify + eval harness
-  ([design](Extraction_Quality_Design.md)); Obsidian connector
-  ([design](Obsidian_Connector_Design.md)).
+  ([design](Extraction_Quality_Design.md)) — **implemented**; remaining:
+  on-device guided generation + chunking, vault-level dedup. Obsidian
+  connector ([design](Obsidian_Connector_Design.md)).
 - **v1.2** — Homebrew channel, Sparkle updates; improved tagging and
   organization.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion

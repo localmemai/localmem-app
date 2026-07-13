@@ -1,6 +1,8 @@
 # Extraction Quality — Two-Pass Extract → Verify (Design)
 
-Status: **Accepted** · 2026-07-12 · Scope: LocalmemCore + app · Extends the
+Status: **Implemented** (core pipeline, agent backends, counts + UI, eval
+harness · 2026-07-13; remaining: on-device guided generation + chunking,
+vault-level dedup) · Accepted 2026-07-12 · Scope: LocalmemCore + app · Extends the
 file connector ([Technical_Design.md §10](Technical_Design.md#10-file-connector))
 
 ## Problem
@@ -113,7 +115,7 @@ prompts and the eval harness.
 
 | Decision | Choice | Why |
 |---|---|---|
-| Who verifies | **Same backend as extraction, v1** | Self-verification still helps (task framing decorrelates errors). Cross-backend (extract via agent, verify free on-device) is a v2 optimization — it must not couple the pipeline to on-device availability. |
+| Who verifies | **Same backend as extraction — permanent** | Self-verification still helps (task framing decorrelates errors). Cross-backend verification was considered and rejected (2026-07-13): not worth the coupling. |
 | Verification is optional? | **No — always on, no setting** | Skipping it silently reintroduces the junk problem the pass exists to kill. The on-device backend (cheapest to run) is also the most junk-prone — the worst candidate for an opt-out. |
 | Verifier fails / times out / bad output | **File → `failed`, retriable** | Never store unverified facts. Reason codes `verify_timeout`, `verify_error`, `verify_invalid_output`; per-file Reprocess is the retry, exactly as today. |
 | Agent-backend cost (2 calls/file) | **Accepted** | The verify prompt is small (source + candidates + rubric — no extraction instructions). File count is user-curated by the deliberate-selection model, which bounds total cost. |
@@ -182,17 +184,26 @@ and agent-CLI implementations selected by the same backend ladder.
 6. **Vault-level dedup** (already on the connector roadmap; runs after
    verification).
 
-## Open questions
+## Open questions — resolved 2026-07-13
 
-1. **Cross-backend verification (v2)** — extract via agent, verify on-device
-   (free, private, decorrelated errors) when available. Measure on the
-   harness before committing.
-2. **Per-document budget** — should the verifier be told a soft cap ("a
-   typical document yields 3–10 memories") or does the rubric bound it
-   naturally? Decide from harness results.
-3. **Persisting drop reasons** — reasons are debug-logged for now; if users
-   ask "why wasn't X imported?", a per-file "what was dropped" view would
-   need them in the DB. Defer until asked.
-4. **Revise-verdict trust** — a `revise` rewrites content; should revised
-   facts be re-checked for grounding (a cheap third mini-pass) or trusted?
-   Start trusted; harness will show if revisions drift.
+1. **Cross-backend verification** — **No.** Keep it simple: the same backend
+   extracts and verifies, permanently — not just v1. The task-framing split
+   (generate vs judge) is the whole mechanism.
+2. **Per-document budget** — **Yes.** The verifier prompt carries a soft cap
+   ("a typical document yields 3–10 memories; a dense document may justify
+   more, but every extra one must clear the gates").
+3. **Persisting drop reasons** — **No.** Debug-log only; never in the DB.
+4. **Revise-verdict trust** — **Trusted.** No grounding re-check pass.
+
+### Implementation simplifications (settled during build)
+
+- **Merge groups are dropped from the v1 contract.** The verdict set is
+  exactly `keep | revise | drop`; the verifier is instructed to `drop` a
+  near-duplicate with a reason naming the kept candidate. Within-file and
+  vault-level dedup carry the deterministic side.
+- **Partial/invalid verdict output fails the file.** If the verdict array
+  misses a candidate index, repeats one, or references one out of range, the
+  file records `verify_invalid_output` (retriable). No silent per-candidate
+  fallback.
+- **"N extracted" is the raw Pass-1 count** (before deterministic filters),
+  so the transparency line reflects everything the extractor proposed.

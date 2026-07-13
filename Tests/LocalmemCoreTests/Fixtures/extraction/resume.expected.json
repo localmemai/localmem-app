@@ -1,0 +1,8 @@
+[
+  {"title": "Backend engineering background", "content": "Backend engineer with nine years of distributed systems experience in Go, focused recently on data-intensive pipelines."},
+  {"title": "Staff engineer at Streamline Data", "content": "Works as staff engineer at Streamline Data since 2022, owning a Kafka and ClickHouse ingestion platform handling two billion events per day."},
+  {"title": "Finch Payments tenure", "content": "Was a senior engineer at Finch Payments from 2018 to 2022, leading the ledger service rewrite."},
+  {"title": "IIT Bombay degree", "content": "Holds a B.Tech in Computer Science from IIT Bombay, class of 2015."},
+  {"title": "Remote-first preference", "content": "Prefers working on remote-first teams."},
+  {"title": "San Francisco base", "content": "Is based in San Francisco, California."}
+]
