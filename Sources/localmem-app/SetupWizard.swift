@@ -19,7 +19,7 @@ enum SetupWizardMode {
 }
 
 enum SetupWizardStep: Int, CaseIterable, Identifiable {
-    case welcome, protectVault, review, run, access
+    case welcome, protectVault, review, run, finish
     var id: Int { rawValue }
 
     var railTitle: String {
@@ -28,7 +28,7 @@ enum SetupWizardStep: Int, CaseIterable, Identifiable {
         case .protectVault: return "Protect vault"
         case .review:       return "Connect agents"
         case .run:          return "Set up"
-        case .access:       return "Access control"
+        case .finish:       return "You're set"
         }
     }
 
@@ -38,7 +38,7 @@ enum SetupWizardStep: Int, CaseIterable, Identifiable {
         case .protectVault: return "lock.shield"
         case .review:       return "person.2"
         case .run:          return "gearshape.2"
-        case .access:       return "lock.rectangle.on.rectangle"
+        case .finish:       return "checkmark.seal"
         }
     }
 }
@@ -63,23 +63,27 @@ enum WizardRunOutcome {
     case failed(String)
     case instructionsInstalled
     case importAdded
+    case toolInstalled
+    case toolSkipped
 
     var symbol: String {
         switch self {
-        case .connected, .instructionsInstalled, .importAdded: return "checkmark.circle.fill"
+        case .connected, .instructionsInstalled, .importAdded, .toolInstalled:
+            return "checkmark.circle.fill"
         case .alreadyConnected: return "arrow.triangle.2.circlepath"
         case .disconnected:     return "minus.circle.fill"
-        case .skipped:          return "minus.circle"
+        case .skipped, .toolSkipped: return "minus.circle"
         case .failed:           return "xmark.octagon.fill"
         }
     }
 
     var tint: Color {
         switch self {
-        case .connected, .instructionsInstalled, .importAdded: return .green
+        case .connected, .instructionsInstalled, .importAdded, .toolInstalled:
+            return .green
         case .alreadyConnected: return .secondary
         case .disconnected:     return .orange
-        case .skipped:          return .secondary
+        case .skipped, .toolSkipped: return .secondary
         case .failed:           return .red
         }
     }
@@ -92,13 +96,15 @@ enum WizardRunOutcome {
         case .skipped:               return "Not connected"
         case .instructionsInstalled: return "Instructions installed"
         case .importAdded:           return "Import line added"
+        case .toolInstalled:         return "Installed"
+        case .toolSkipped:           return "Skipped"
         case .failed(let why):       return "Failed — \(why)"
         }
     }
 }
 
 struct WizardRunRow: Identifiable {
-    enum Kind { case agent, instruction }
+    enum Kind { case agent, instruction, tool }
     enum State { case pending, running, done(WizardRunOutcome) }
 
     let id: String
@@ -122,6 +128,21 @@ final class SetupWizardModel {
     var isRunning = false
     var runComplete = false
 
+    /// The bundled CLI is offered as one more row on the review step.
+    /// Defaults OFF: installing may show an admin-password prompt, which
+    /// should never surprise someone who didn't ask for a CLI.
+    var installCLI = false
+    var cliStatus = CLIToolInstaller.status()
+
+    var cliAvailable: Bool {
+        if case .unavailable = cliStatus { return false }
+        return true
+    }
+    var cliInstalled: Bool {
+        if case .installed = cliStatus { return true }
+        return false
+    }
+
     init(mode: SetupWizardMode) {
         self.mode = mode
         detect()
@@ -129,7 +150,7 @@ final class SetupWizardModel {
 
     var steps: [SetupWizardStep] {
         mode == .firstRun
-            ? [.welcome, .protectVault, .review, .run, .access]
+            ? [.welcome, .protectVault, .review, .run, .finish]
             : [.review, .run]
     }
 
@@ -146,6 +167,7 @@ final class SetupWizardModel {
     /// to every installed agent on first run, and to the currently-connected set
     /// when reconfiguring.
     func detect() {
+        cliStatus = CLIToolInstaller.status()
         agents = KnownAgents.all.map { known in
             let snapshot = AgentSnapshot(
                 id: known.id, displayName: known.displayName, symbol: known.symbol,
@@ -258,6 +280,26 @@ final class SetupWizardModel {
                 update(rowID: "rm-\(agent.id)") { $0.state = .done(outcome) }
             }
 
+            // CLI install, if the user opted in on the review step. This is
+            // the moment an admin-password prompt may appear — during the
+            // "doing things" step, where the user expects activity.
+            if runRows.contains(where: { $0.id == "cli" }) {
+                update(rowID: "cli") { $0.state = .running }
+                var outcome = WizardRunOutcome.toolInstalled
+                do {
+                    try await Task.detached { try CLIToolInstaller.install() }.value
+                } catch let error as CLIToolInstallError {
+                    if case .cancelled = error { outcome = .toolSkipped }
+                    else { outcome = .failed(error.errorDescription ?? "install failed") }
+                } catch {
+                    outcome = .failed(error.localizedDescription)
+                }
+                if case .toolInstalled = outcome, CLIToolInstaller.status() != .installed {
+                    outcome = .failed("install did not complete")
+                }
+                update(rowID: "cli") { $0.state = .done(outcome) }
+            }
+
             detect()
             isRunning = false
             runComplete = true
@@ -284,6 +326,10 @@ final class SetupWizardModel {
                 rows.append(.init(id: "imp-\(a.id)", name: a.displayName, symbol: a.symbol,
                                   colorID: a.id, kind: .instruction))
             }
+        }
+        if installCLI, cliAvailable, !cliInstalled {
+            rows.append(.init(id: "cli", name: "Command-line tool", symbol: "terminal",
+                              colorID: nil, kind: .tool))
         }
         return rows
     }
@@ -403,7 +449,7 @@ struct SetupWizardView: View {
                 case .protectVault: WizardProtectScreen(model: model)
                 case .review:       WizardReviewScreen(model: model)
                 case .run:          WizardRunScreen(model: model)
-                case .access:       WizardAccessScreen()
+                case .finish:       WizardFinishScreen()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -429,8 +475,6 @@ struct SetupWizardView: View {
         switch model.currentStep {
         case .protectVault where !model.touchIDEnabled && model.touchIDState != .authenticating:
             Button("Not now") { withAnimation(.snappy) { model.next() } }
-        case .access:
-            Button("Set up access later") { finish() }
         default:
             EmptyView()
         }
@@ -457,7 +501,7 @@ struct SetupWizardView: View {
         case .run:
             if model.isRunning { return "Setting up…" }
             return model.mode == .firstRun ? "Continue" : "Done"
-        case .access:       return "Open Localmem"
+        case .finish:       return "Open Localmem"
         }
     }
 
@@ -473,7 +517,7 @@ struct SetupWizardView: View {
             model.enableTouchID()
         case .run where model.runComplete && model.mode == .reconfigure:
             finish()
-        case .access:
+        case .finish:
             finish()
         default:
             withAnimation(.snappy) { model.next() }
@@ -616,12 +660,62 @@ private struct WizardReviewScreen: View {
                         ForEach($model.agents) { $agent in
                             WizardAgentRow(agent: $agent, mode: model.mode)
                         }
+                        // The terminal is one more surface Localmem can hook
+                        // into — decided here like any agent, executed in the
+                        // run step. Defaults off: installing can prompt for an
+                        // admin password, which should never be a surprise.
+                        if model.cliAvailable {
+                            Divider().padding(.vertical, 2)
+                            WizardCLIRow(model: model)
+                        }
                     }
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(28)
+    }
+}
+
+private struct WizardCLIRow: View {
+    @Bindable var model: SetupWizardModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "terminal")
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Command-line tool").fontWeight(.medium)
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            if model.cliInstalled {
+                Pill(text: "Installed", color: .green)
+            } else {
+                Toggle("", isOn: $model.installCLI)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var caption: String {
+        switch model.cliStatus {
+        case .installed:  return "`localmem` is already on your PATH."
+        case .conflict:   return "Replaces another `localmem` on your PATH. May ask for your Mac password."
+        default:          return "Adds the `localmem` command to your PATH. May ask for your Mac password."
+        }
     }
 }
 
@@ -662,10 +756,10 @@ private struct WizardAgentRow: View {
 
 private struct WizardRunScreen: View {
     @Bindable var model: SetupWizardModel
-    @State private var showDetails = false
 
     private var agentRows: [WizardRunRow] { model.runRows.filter { $0.kind == .agent } }
     private var instructionRows: [WizardRunRow] { model.runRows.filter { $0.kind == .instruction } }
+    private var toolRows: [WizardRunRow] { model.runRows.filter { $0.kind == .tool } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -679,43 +773,26 @@ private struct WizardRunScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // This screen's only job is showing what happened — the next-step
+            // extras live on the "You're set" step so nothing hides below a
+            // fold on the fixed-height sheet.
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if !agentRows.isEmpty {
+                        WizardRunSection(title: "Agents", rows: agentRows)
+                    }
+                    if !instructionRows.isEmpty {
+                        WizardRunSection(title: "Instructions", rows: instructionRows)
+                    }
+                    if !toolRows.isEmpty {
+                        WizardRunSection(title: "Tools", rows: toolRows)
+                    }
+
                     if model.runComplete {
-                        // Actions first: on the fixed 520pt sheet the next
-                        // steps (CLI install, try-it prompt) must sit above the
-                        // fold, or users never discover them — the per-agent
-                        // result rows are transient detail once everything ran,
-                        // so they collapse into a disclosure below.
                         HStack(spacing: 14) {
                             summaryChip("\(model.connectedCount) connected", .green)
                             if model.disconnectedCount > 0 { summaryChip("\(model.disconnectedCount) disconnected", .orange) }
                             if model.failedCount > 0 { summaryChip("\(model.failedCount) failed", .red) }
-                        }
-                        CLIToolCard()
-                        TryItPromptCard()
-
-                        DisclosureGroup(isExpanded: $showDetails) {
-                            VStack(alignment: .leading, spacing: 18) {
-                                if !agentRows.isEmpty {
-                                    WizardRunSection(title: "Agents", rows: agentRows)
-                                }
-                                if !instructionRows.isEmpty {
-                                    WizardRunSection(title: "Instructions", rows: instructionRows)
-                                }
-                            }
-                            .padding(.top, 10)
-                        } label: {
-                            Text("Setup details")
-                                .font(.callout.weight(.medium))
-                        }
-                        .padding(.top, 2)
-                    } else {
-                        if !agentRows.isEmpty {
-                            WizardRunSection(title: "Agents", rows: agentRows)
-                        }
-                        if !instructionRows.isEmpty {
-                            WizardRunSection(title: "Instructions", rows: instructionRows)
                         }
                     }
                 }
@@ -725,91 +802,12 @@ private struct WizardRunScreen: View {
         }
         .padding(28)
         .onAppear { model.startRun() }
-        // Anything less than a full success deserves immediate visibility —
-        // auto-expand the details when something failed or was disconnected.
-        .onChange(of: model.runComplete) { _, complete in
-            if complete { showDetails = model.failedCount > 0 || model.disconnectedCount > 0 }
-        }
     }
 
     private func summaryChip(_ text: String, _ color: Color) -> some View {
         Text(text)
             .font(.callout.weight(.semibold))
             .foregroundStyle(color)
-    }
-}
-
-/// Optional card offering to put the bundled `localmem` CLI on the user's PATH.
-/// Only shown when the app carries a bundled CLI (i.e. a packaged .app).
-private struct CLIToolCard: View {
-    @State private var status = CLIToolInstaller.status()
-    @State private var busy = false
-    @State private var errorText: String?
-
-    var body: some View {
-        if status != .unavailable {
-            HStack(spacing: 12) {
-                Image(systemName: "terminal")
-                    .font(.title3)
-                    .foregroundStyle(.tint)
-                    .frame(width: 26)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Command-line tool").fontWeight(.medium)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(errorText != nil ? .red : .secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                trailing
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-        }
-    }
-
-    private var subtitle: String {
-        if let errorText { return errorText }
-        switch status {
-        case .installed:          return "`localmem` is on your PATH."
-        case .conflict(let path): return "Another `localmem` is on your PATH (\(path))."
-        case .notInstalled:       return "Add `localmem` to your PATH to use it from any terminal."
-        case .unavailable:        return ""
-        }
-    }
-
-    @ViewBuilder private var trailing: some View {
-        if busy {
-            ProgressView().controlSize(.small)
-        } else {
-            switch status {
-            case .installed:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            case .conflict:
-                Button("Replace") { install() }
-            case .notInstalled:
-                Button("Install") { install() }
-            case .unavailable:
-                EmptyView()
-            }
-        }
-    }
-
-    private func install() {
-        busy = true
-        errorText = nil
-        Task {
-            do {
-                try await Task.detached { try CLIToolInstaller.install() }.value
-            } catch let error as CLIToolInstallError {
-                if case .cancelled = error {} else { errorText = error.errorDescription }
-            } catch {
-                errorText = error.localizedDescription
-            }
-            status = CLIToolInstaller.status()
-            busy = false
-        }
     }
 }
 
@@ -895,42 +893,30 @@ private struct WizardRunRowView: View {
     }
 }
 
-private struct WizardAccessScreen: View {
+private struct WizardFinishScreen: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            WizardHero(symbol: "lock.rectangle.on.rectangle")
-            Text("You’re in control")
+            WizardHero(symbol: "checkmark.seal")
+            Text("You’re set")
                 .font(.largeTitle.weight(.bold))
-            Text("Every memory is visible to all your agents by default — but you decide the exceptions. Block a sensitive memory from one agent, or hide everything from another.")
+            Text("Your agents now share one private memory on this Mac. Give it its first fact:")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 8) {
-                accessExample(memory: "AWS root credentials", agent: "Cursor", allowed: false)
-                accessExample(memory: "Coffee preference", agent: "Claude Code", allowed: true)
-            }
-            .padding(.top, 4)
+            TryItPromptCard()
 
-            Text("Manage this anytime from the Agents tab.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.shield").foregroundStyle(.tint).frame(width: 22)
+                Text("Every memory is visible to all your agents by default — set per-memory exceptions anytime from the Agents tab.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 2)
+
             Spacer()
         }
         .padding(28)
-    }
-
-    private func accessExample(memory: String, agent: String, allowed: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc.text").foregroundStyle(.secondary).frame(width: 20)
-            Text(memory).fontWeight(.medium)
-            Spacer()
-            Image(systemName: "arrow.right").foregroundStyle(.tertiary)
-            Text(agent).foregroundStyle(.secondary)
-            Pill(text: allowed ? "Allowed" : "Blocked", color: allowed ? .green : .red)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
     }
 }
