@@ -10,7 +10,8 @@ all on your machine. Open-source core, macOS-native.
 
 [localmem.ai][site]
 
-[![License: Apache 2.0 + FSL](https://img.shields.io/badge/License-Apache_2.0_%2B_FSL-blue.svg)](LICENSING.md)
+[![Core license: Apache 2.0](https://img.shields.io/badge/Core-Apache_2.0-blue.svg)](LICENSING.md)
+[![App license: FSL-1.1-ALv2](https://img.shields.io/badge/App-FSL--1.1--ALv2-blue.svg)](LICENSING.md)
 [![CI](https://github.com/localmemai/localmem-app/actions/workflows/ci.yml/badge.svg)](https://github.com/localmemai/localmem-app/actions/workflows/ci.yml)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#getting-started)
 
