@@ -144,6 +144,15 @@ rm -f "$DMG"
 hdiutil create -volname "Localmem" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
+# ---- 4b. sign the DMG container ---------------------------------------------
+# The DMG is its own container: Gatekeeper evaluates it separately from the
+# .app inside, so sign it explicitly too.
+if [ -n "$SIGN_IDENTITY" ]; then
+	log "Signing DMG container…"
+	codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+	codesign --verify --verbose=2 "$DMG"
+fi
+
 # ---- 5. notarize + staple --------------------------------------------------
 if [ -n "$SIGN_IDENTITY" ] && [ -n "$NOTARY_PROFILE" ]; then
 	log "Submitting DMG to Apple notary service (profile: $NOTARY_PROFILE)…"

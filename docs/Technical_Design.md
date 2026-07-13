@@ -604,10 +604,17 @@ The marketing site lives in its own repo,
 [`localmemai/localmem-web`](https://github.com/localmemai/localmem-web) (a
 single static `index.html`, deployed on Vercel) — it is no longer vendored in
 this repo. The site serves the download button (DMG), the install command,
-`install.sh`, the Sparkle appcast, the release artifacts, and docs. This implies a CI release
-pipeline: build the three binaries (universal arm64 + x86_64) → assemble the
-signed `.app` → sign + notarize → produce DMG + ZIP → upload artifacts → update
-the appcast + Homebrew formula/cask.
+`install.sh`, the Sparkle appcast, the release artifacts, and docs.
+
+The CI release pipeline is **implemented** in
+[`.github/workflows/release.yml`](../.github/workflows/release.yml): pushing a
+`v*` tag builds the universal binaries, assembles and signs the `.app` (via
+`build-dmg.sh`), signs the DMG container, notarizes + staples, verifies the
+Gatekeeper verdict, and publishes a GitHub Release with the versioned DMG, the
+stable `Localmem.dmg` alias (the site's download URL), and checksums.
+Credentials come from repo secrets (Developer ID `.p12` + App Store Connect
+API key). Still deferred: ZIP artifact, Sparkle appcast update, Homebrew
+formula/cask.
 
 ### Prerequisites & costs
 
