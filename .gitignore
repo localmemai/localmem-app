@@ -1,0 +1,16 @@
+.build/
+.swiftpm/
+.vscode/
+.DS_Store
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata
+
+# Coverage artifacts
+*.profraw
+*.profdata
+
+# Packaging output
+dist/
+
+# Agent tooling (local only)
+.claude/

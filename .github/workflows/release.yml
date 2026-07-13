@@ -1,0 +1,164 @@
+# Release pipeline — build, sign, notarize, staple, and publish the DMG.
+#
+# Trigger: push a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`).
+# The tag IS the release gate — nothing here runs on ordinary pushes or PRs.
+#
+# The heavy lifting lives in packaging/build-dmg.sh (the same script used for
+# local releases); this workflow only provisions credentials around it and
+# publishes the artifacts.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#
+#   MACOS_CERT_P12_BASE64   Developer ID Application certificate + private key,
+#                           exported as .p12, base64-encoded:
+#                             base64 -i DeveloperID.p12 | pbcopy
+#   MACOS_CERT_PASSWORD     password chosen when exporting the .p12
+#   NOTARY_KEY_P8_BASE64    App Store Connect API key (.p8), base64-encoded.
+#                           Create at App Store Connect → Users and Access →
+#                           Integrations → App Store Connect API (Developer role).
+#   NOTARY_KEY_ID           the key's Key ID
+#   NOTARY_ISSUER_ID        the API keys page's Issuer ID
+#
+# Published artifacts:
+#   Localmem-<version>.dmg  versioned, for history/checksums
+#   Localmem.dmg            stable alias — the localmem.ai download button
+#                           points at releases/latest/download/Localmem.dmg
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, notarize & publish
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26 (Swift 6.2)
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.app 2>/dev/null \
+            || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION (tag $GITHUB_REF_NAME)"
+
+      - name: Verify version constant matches tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! grep -q "current = \"$VERSION\"" Sources/LocalmemCore/LocalmemVersion.swift; then
+            echo "::error::LocalmemVersion.current != $VERSION — bump Sources/LocalmemCore/LocalmemVersion.swift before tagging"
+            exit 1
+          fi
+          echo "LocalmemVersion.current matches tag."
+
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          printf "%s" "$CERT_P12_BASE64" | tr -d " \n\r\t" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Auto-detect the identity so it never drifts from the imported cert.
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No Developer ID Application identity in the imported .p12"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "Using identity: $IDENTITY"
+
+      - name: Store notary credentials
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          printf "%s" "$NOTARY_KEY_P8_BASE64" | tr -d " \n\r\t" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials localmem-ci \
+            --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID"
+          rm -f "$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_PROFILE=localmem-ci" >> "$GITHUB_ENV"
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-release-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-release-
+            ${{ runner.os }}-spm-
+
+      - name: Build, sign, notarize & staple DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: packaging/build-dmg.sh
+
+      - name: Verify Gatekeeper acceptance
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          xcrun stapler validate "dist/Localmem-$VERSION.dmg"
+          spctl -a -t open --context context:primary-signature -v \
+            "dist/Localmem-$VERSION.dmg" 2>&1 | tee /tmp/spctl.out
+          grep -q "source=Notarized Developer ID" /tmp/spctl.out
+
+      - name: Prepare artifacts & checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cp "dist/Localmem-$VERSION.dmg" dist/Localmem.dmg
+          cd dist
+          shasum -a 256 "Localmem-$VERSION.dmg" Localmem.dmg > checksums.txt
+          cat checksums.txt
+          {
+            echo "## Checksums"
+            echo
+            echo '`Localmem.dmg` is the same file as the versioned DMG — the stable-URL alias used by the localmem.ai download button.'
+            echo
+            echo '```'
+            cat checksums.txt
+            echo '```'
+          } > release-notes-extra.md   # gh prepends this above the generated notes
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Localmem-$VERSION.dmg" \
+            "dist/Localmem.dmg" \
+            "dist/checksums.txt" \
+            --title "Localmem $VERSION" \
+            --generate-notes \
+            --notes-file dist/release-notes-extra.md \
+            --latest

@@ -1,0 +1,16 @@
+FIRST HORIZON BANK — ACCOUNT STATEMENT
+Account: ****4821    Period: 01 Jun 2026 – 30 Jun 2026
+Page 1 of 2
+
+Date        Description                     Debit      Credit     Balance
+02 Jun      POS BlueBottle Coffee           6.50                  4,318.22
+03 Jun      ACH Salary Streamline Data                 8,400.00   12,718.22
+05 Jun      POS Whole Foods Market          92.14                 12,626.08
+09 Jun      Transfer to Savings             1,000.00              11,626.08
+14 Jun      POS Shell Gasoline              48.90                 11,577.18
+21 Jun      Netflix.com                     15.49                 11,561.69
+28 Jun      Rent — Parkview Apts            2,850.00              8,711.69
+
+Closing balance: 8,711.69
+Generated on 01 Jul 2026 by CoreBank v9.2
+This statement is provided for informational purposes only.

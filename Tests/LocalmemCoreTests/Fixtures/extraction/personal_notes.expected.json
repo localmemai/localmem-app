@@ -1,0 +1,6 @@
+[
+  {"title": "Fastify migration", "content": "Decided to move the side project's API from Express to Fastify for performance and the cleaner plugin story."},
+  {"title": "Morning deep work", "content": "Works best in the mornings and blocks 9-12 for deep work, keeping meetings after lunch."},
+  {"title": "Priya's birthday", "content": "Priya's birthday is March 14; wants to book the Ethiopian restaurant Mesob she liked."},
+  {"title": "Learning Rust", "content": "Is learning Rust with about 30 minutes of Rustlings exercises daily."}
+]

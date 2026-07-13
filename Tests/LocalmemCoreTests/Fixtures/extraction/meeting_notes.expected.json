@@ -1,0 +1,5 @@
+[
+  {"title": "Ingest v2 cutover plan", "content": "Decided to ship the ingest v2 cutover behind a flag on August 1, 2026, with full rollout August 15 if the error budget holds."},
+  {"title": "On-call rotation ownership", "content": "Is taking over the on-call rotation schedule from Wei, who is on parental leave from August 2026."},
+  {"title": "Weekly status in Linear", "content": "Team status updates go in Linear weekly rather than Slack, per Marcus."}
+]

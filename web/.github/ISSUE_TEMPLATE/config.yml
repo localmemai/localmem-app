@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Localmem product issues
+    url: https://github.com/localmemai/localmem-app/issues
+    about: Bugs or requests about the app, CLI, or MCP server go here.
+  - name: Security vulnerability
+    url: https://github.com/localmemai/localmem-web/security/advisories/new
+    about: Please report security issues privately, not as public issues.

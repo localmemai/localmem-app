@@ -1,0 +1,98 @@
+# Contributing to Localmem
+
+Thanks for your interest in improving Localmem. This guide covers how to build
+the project, the conventions we follow, and how to get a change merged.
+
+## Prerequisites
+
+Localmem is a **macOS-only** product. To build it you'll need:
+
+- macOS 26 or later
+- A recent Swift toolchain (the package targets `swift-tools-version: 6.2`)
+- Xcode command-line tools
+
+## Building and testing
+
+Localmem is a single Swift package with three executable products and a shared
+core library.
+
+```sh
+# Build everything
+swift build
+
+# Run the full test suite
+swift test
+
+# Run a specific surface
+swift run localmem --help
+swift run localmem-app
+```
+
+Please run `swift test` before opening a pull request and make sure the suite
+passes. If you add or change behavior, add tests alongside it — coverage lives
+in [`Tests/`](Tests/).
+
+### Packaging the app
+
+[`packaging/build-dmg.sh`](packaging/build-dmg.sh) assembles the signed
+`Localmem.app` (all three binaries co-located) and produces a DMG. For a quick
+unsigned local build:
+
+```sh
+# Fast, arm64-only, unsigned — for testing the bundle layout, not distributable
+ARCHS="arm64" VERSION=0.0.0-dev packaging/build-dmg.sh
+
+# Release build: universal, signed, and notarized
+VERSION=0.1.0 \
+  SIGN_IDENTITY="Developer ID Application: … (TEAMID)" \
+  NOTARY_PROFILE=localmem-notary \
+  packaging/build-dmg.sh
+```
+
+Output lands in `dist/` (git-ignored).
+
+## Project layout
+
+Everything sits on top of one shared core so the app, CLI, and MCP server never
+diverge:
+
+- `Sources/LocalmemCore` — memory CRUD, search, permissions, audit logging. All
+  real logic lives here.
+- `Sources/localmem` — the command-line tool.
+- `Sources/localmem-mcp` — the MCP server AI clients talk to.
+- `Sources/localmem-app` — the SwiftUI vault app.
+- `docs/` — design documents.
+
+When you add behavior, put it in `LocalmemCore` and expose it through the
+surfaces, rather than duplicating logic in a single binary.
+
+## Conventions
+
+- **Match the surrounding code.** Follow the naming, structure, and comment
+  density already in the file you're editing.
+- **The brand name is "Localmem"** — lowercase `m`, never "LocalMem".
+- **Keep it local-first.** Localmem does not require an account, a server, or the
+  network. Changes should preserve that.
+
+## Pull requests
+
+1. Fork the repo and create a branch for your change.
+2. Keep each PR focused on a single concern.
+3. Make sure `swift build` and `swift test` both pass.
+4. Write a clear description of what changed and why.
+
+For anything large or architectural, open an issue first so we can discuss the
+approach before you invest the work.
+
+## License & CLA
+
+Localmem is open-core — the core, CLI, and MCP server are
+[Apache 2.0](LICENSE); the macOS app is source-available under
+[FSL-1.1-ALv2](Sources/localmem-app/LICENSE.md). See
+[LICENSING.md](LICENSING.md) for the full picture.
+
+Because the app is commercially licensed, we ask every contributor to sign a
+lightweight [Contributor License Agreement](CLA.md) once — a bot will prompt
+you on your first pull request, and signing is a single PR comment. You keep
+full copyright of your work; the CLA licenses it to Localmem so the combined
+work can keep being licensed as described above.
