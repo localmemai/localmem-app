@@ -407,7 +407,7 @@ struct SetupWizardView: View {
             Divider()
             bodyColumn
         }
-        .frame(width: 680, height: 520)
+        .frame(width: 680, height: 560)
     }
 
     private func finish() {
@@ -656,7 +656,7 @@ private struct WizardReviewScreen: View {
                 .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 ScrollView {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         ForEach($model.agents) { $agent in
                             WizardAgentRow(agent: $agent, mode: model.mode)
                         }
@@ -706,15 +706,15 @@ private struct WizardCLIRow: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 9)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var caption: String {
         switch model.cliStatus {
         case .installed:  return "`localmem` is already on your PATH."
-        case .conflict:   return "Replaces another `localmem` on your PATH. May ask for your Mac password."
-        default:          return "Adds the `localmem` command to your PATH. May ask for your Mac password."
+        case .conflict:   return "Replaces another `localmem` on your PATH — may ask for your password."
+        default:          return "Adds `localmem` to your PATH — may ask for your password."
         }
     }
 }
@@ -748,7 +748,7 @@ private struct WizardAgentRow: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 9)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
         .opacity(agent.isInstalled ? 1 : 0.55)
     }
