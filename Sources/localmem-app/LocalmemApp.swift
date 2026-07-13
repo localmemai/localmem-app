@@ -2769,15 +2769,14 @@ final class AuditLogViewModel {
         // touched via the join — so the filter lists memories that were only read.
         var ids = Set(all.compactMap(\.memoryID))
         for linked in memoryLinks.values { ids.formUnion(linked) }
-        return ids.sorted { lhs, rhs in
-            memoryTitle(for: lhs) < memoryTitle(for: rhs)
-        }.map { id in
-            if let memory = indexed[id] {
-                return MemoryChoice(id: id, title: memory.title ?? String(memory.content.prefix(40)))
-            }
-            let prefix = id.uuidString.prefix(8)
-            return MemoryChoice(id: id, title: "Deleted memory \(prefix)")
-        }
+        // Live memories only: a deleted memory's history is still reachable
+        // (its rows stay in the log, and arriving via a stale filter shows the
+        // "Deleted memory …" fallback tag), but dozens of tombstone entries
+        // must not crowd the picker.
+        return ids.compactMap { id -> MemoryChoice? in
+            guard let memory = indexed[id] else { return nil }
+            return MemoryChoice(id: id, title: memory.title ?? String(memory.content.prefix(40)))
+        }.sorted { $0.title < $1.title }
     }
 
     func memoryTitle(for id: Memory.ID) -> String {
@@ -2868,6 +2867,11 @@ struct AuditLogView: View {
                         .listRowSeparator(.visible)
                 }
                 .listStyle(.inset)
+                // Changing either filter swaps the row set under the list, which
+                // would otherwise keep the old scroll offset and land the user
+                // mid-list. A filter-derived identity recreates the list at the
+                // top instead.
+                .id("audit-\(memoryFilter?.uuidString ?? "all")-\(vm.actorFilter ?? "all")")
                 .overlay {
                     if vm.rows(memoryFilter: memoryFilter).isEmpty {
                         ContentUnavailableView("No activity", systemImage: "list.bullet.rectangle")
