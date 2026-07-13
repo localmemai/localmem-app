@@ -57,6 +57,16 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing version $VERSION (tag $GITHUB_REF_NAME)"
 
+      - name: Verify version constant matches tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! grep -q "current = \"$VERSION\"" Sources/LocalmemCore/LocalmemVersion.swift; then
+            echo "::error::LocalmemVersion.current != $VERSION — bump Sources/LocalmemCore/LocalmemVersion.swift before tagging"
+            exit 1
+          fi
+          echo "LocalmemVersion.current matches tag."
+
       - name: Import Developer ID certificate
         env:
           CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}

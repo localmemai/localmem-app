@@ -624,17 +624,17 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 
 ## 13. Roadmap
 
-- **v0.2** — macOS vault app (SwiftUI), local storage, MCP adapter, per-memory
-  access control, file connector (§10).
-- **v0.3** — extraction quality: two-pass extract → verify + eval harness
+- **v1.0 (shipped)** — macOS vault app (SwiftUI), local storage, MCP adapter,
+  per-memory access control, file connector (§10), signed + notarized DMG via
+  the tag-triggered release pipeline (§12).
+- **v1.1** — extraction quality: two-pass extract → verify + eval harness
   ([design](Extraction_Quality_Design.md)); Obsidian connector
-  ([design](Obsidian_Connector_Design.md)); signed/notarized distribution
-  (DMG + Homebrew), Sparkle updates.
-- **v0.4** — optional CloudKit **encrypted** sync; iPhone companion
-  (browse/search/capture); review/approval flows; improved tagging and
+  ([design](Obsidian_Connector_Design.md)).
+- **v1.2** — Homebrew channel, Sparkle updates; improved tagging and
   organization.
-- **v1.0** — additional connectors (Apple Notes, Notion) and agent adapters;
-  stronger retrieval and ranking.
+- **later** — optional CloudKit **encrypted** sync; iPhone companion
+  (browse/search/capture); additional connectors (Apple Notes, Notion) and
+  agent adapters; stronger retrieval and ranking.
 
 ### Out of scope (for now)
 

@@ -16,7 +16,7 @@ all on your machine. Open source, macOS-native.
 
 </div>
 
-> **Status:** early and under active development. macOS-only, pre-1.0.
+> **Status:** early and under active development. macOS-only.
 > Signed & notarized builds are on the [releases page][releases].
 
 ---

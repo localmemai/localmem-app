@@ -13,7 +13,7 @@ struct LocalmemMCP {
 
         let server = Server(
             name: "localmem",
-            version: "0.1.0",
+            version: LocalmemVersion.current,
             capabilities: .init(tools: .init(listChanged: false))
         )
 
