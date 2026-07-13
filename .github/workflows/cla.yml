@@ -29,4 +29,6 @@ jobs:
           path-to-signatures: "cla-signatures.json"
           path-to-document: "https://github.com/localmemai/localmem-app/blob/main/CLA.md"
           branch: "cla-signatures"
-          allowlist: "vedcoder,dependabot[bot]"
+          # `claude` is the resolved co-author identity on agent-assisted
+          # commits (Co-Authored-By: Claude <noreply@anthropic.com>).
+          allowlist: "vedcoder,claude,dependabot[bot]"

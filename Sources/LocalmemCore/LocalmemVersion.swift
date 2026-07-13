@@ -9,5 +9,5 @@ import Foundation
 /// the MCP/CLI version can never silently drift from the released app again
 /// (it sat at "0.1.0" for three releases before this existed).
 public enum LocalmemVersion {
-    public static let current = "1.0.0"
+    public static let current = "1.0.1"
 }
