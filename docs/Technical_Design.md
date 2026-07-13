@@ -640,11 +640,12 @@ registration.
 
 ### Website & release pipeline
 
-The marketing site lives in its own repo,
-[`localmemai/localmem-web`](https://github.com/localmemai/localmem-web) (a
-single static `index.html`, deployed on Vercel) — it is no longer vendored in
-this repo. The site serves the download button (DMG), the install command,
-`install.sh`, the Sparkle appcast, the release artifacts, and docs.
+The marketing site lives in this repo under [`web/`](../web) (a single static
+`index.html`), deployed on Vercel with the project's Root Directory set to
+`web` — pushes that don't touch `web/` skip deployment automatically. The
+site serves the download button (the stable
+`releases/latest/download/Localmem.dmg` URL) and will later serve the
+install command, `install.sh`, and the Sparkle appcast.
 
 The CI release pipeline is **implemented** in
 [`.github/workflows/release.yml`](../.github/workflows/release.yml): pushing a
