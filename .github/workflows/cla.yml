@@ -29,6 +29,8 @@ jobs:
           path-to-signatures: "cla-signatures.json"
           path-to-document: "https://github.com/localmemai/localmem-app/blob/main/CLA.md"
           branch: "cla-signatures"
-          # `claude` is the resolved co-author identity on agent-assisted
-          # commits (Co-Authored-By: Claude <noreply@anthropic.com>).
-          allowlist: "vedcoder,claude,dependabot[bot]"
+          # Maintainer and org-owned accounts are exempt — they already hold
+          # the rights the CLA grants, so gating them on their own agreement is
+          # circular. `claude` is the resolved co-author identity on
+          # agent-assisted commits (Co-Authored-By: Claude <noreply@anthropic.com>).
+          allowlist: "vedcoder,localmem-ai,claude,dependabot[bot]"
