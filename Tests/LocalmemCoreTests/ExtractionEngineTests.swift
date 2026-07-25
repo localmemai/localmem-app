@@ -359,6 +359,9 @@ struct ExtractionEngineTests {
         #expect(state?.keptCount == 0)
         #expect(verifier.calls == 0)
         #expect(try await memoryStore.count() == 0)
+        // Success with zero facts must carry a reason the UI can show.
+        #expect(state?.reasonCode == "no_facts")
+        #expect(state?.error?.contains("No personal facts found") == true)
     }
 
     @Test("All candidates dropped by the verifier is still a processed file")
@@ -378,5 +381,8 @@ struct ExtractionEngineTests {
         #expect(state?.extractedCount == 2)
         #expect(state?.keptCount == 0)
         #expect(try await memoryStore.count() == 0)
+        // The all-dropped case explains itself via the curation wording.
+        #expect(state?.reasonCode == "no_facts")
+        #expect(state?.error?.contains("curation dropped every candidate") == true)
     }
 }
