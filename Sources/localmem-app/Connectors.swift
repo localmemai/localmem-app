@@ -43,6 +43,7 @@ struct ConnectorsCatalogView: View {
     @State private var detecting = false
     @State private var backendChoices: [BackendChoice] = []
     @State private var choosingBackend = false
+    @State private var pendingBackend: ExtractionBackend?
     @State private var blockedMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 300, maximum: 460), spacing: 16, alignment: .top)]
@@ -59,10 +60,18 @@ struct ConnectorsCatalogView: View {
                 catalog
             }
         }
-        .sheet(isPresented: $choosingBackend) {
+        .sheet(isPresented: $choosingBackend, onDismiss: {
+            // The open panel must not start until the sheet is fully torn
+            // down: runModal() spins a nested run loop, and entering it
+            // mid-dismissal wedges the window's sheet state so the next
+            // presentation renders collapsed (#19).
+            guard let backend = pendingBackend else { return }
+            pendingBackend = nil
+            pickFiles(backend: backend)
+        }) {
             BackendChoiceSheet(choices: backendChoices) { backend in
+                pendingBackend = backend
                 choosingBackend = false
-                pickFiles(backend: backend)
             }
         }
         .alert("Can't import", isPresented: Binding(
@@ -227,7 +236,11 @@ struct BackendChoiceSheet: View {
             }
         }
         .padding(24)
+        // Height floor so a degenerate first layout can't present the sheet
+        // collapsed (see AgentDetailsSheet for the same macOS sheet-sizing
+        // guard). Two choice rows plus chrome comfortably exceed this.
         .frame(width: 480)
+        .frame(minHeight: 240)
     }
 }
 
