@@ -404,7 +404,9 @@ private struct FileDetailPane: View {
                     VStack(spacing: 8) {
                         ForEach(memories) { memory in memoryRow(memory) }
                         if memories.isEmpty && !isBusy {
-                            Text("No memories yet.")
+                            Text(state?.reasonCode == "no_facts"
+                                 ? "No personal facts were found in this file."
+                                 : "No memories yet.")
                                 .font(.callout).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.vertical, 16)
