@@ -166,8 +166,8 @@ public protocol FactExtractor: Sendable {
 /// or the boilerplate blocklists — the deterministic filter and the verifier
 /// own precision now. See docs/Technical_Design.md section 10.
 public enum ExtractionPrompt {
-    public static func build(text: String, context: ExtractionContext) -> String {
-        """
+    /// The task rubric shared by both prompt variants.
+    static let rubric = """
         You read a document and propose candidate memories for a personal memory \
         store: durable facts about who the person is and their world, their \
         preferences, decisions, plans, and ongoing work. A separate curation pass \
@@ -182,6 +182,11 @@ public enum ExtractionPrompt {
         - "type": "fact" for biographical/contextual info and records, "preference" for \
         likes, dislikes, and working style, "decision" for choices made, "project" for \
         ongoing work, "note" only when nothing else fits.
+        """
+
+    public static func build(text: String, context: ExtractionContext) -> String {
+        """
+        \(rubric)
 
         Return ONLY a JSON array (no prose, no markdown code fences). Each item:
         {"title": "...", "content": "...", "type": "fact|preference|decision|project|note", "tags": ["2-4","lowercase","tags"]}
@@ -196,6 +201,28 @@ public enum ExtractionPrompt {
 
         If there is genuinely nothing worth remembering, return [].
         Do not use any tools; answer directly.
+
+        Source: \(context.sourceName) — \(context.relPath)
+
+        TEXT:
+        \(text)
+        """
+    }
+
+    /// Variant for guided generation (the on-device backend): the response
+    /// format is enforced by constrained decoding, so the prompt carries no
+    /// JSON syntax — describing a second format would only confuse the model.
+    public static func guided(text: String, context: ExtractionContext) -> String {
+        """
+        \(rubric)
+
+        Example — notes snippet "Switched the team to Linear last week. I'm off \
+        dairy for a while, doctor's orders." → two candidates: a "decision" titled \
+        "Linear adoption" ("Moved the team's issue tracking to Linear."), and a \
+        "fact" titled "Dairy-free diet" ("Is avoiding dairy on medical advice.").
+
+        Give each candidate 2-4 lowercase tags. If there is genuinely nothing \
+        worth remembering, return an empty list.
 
         Source: \(context.sourceName) — \(context.relPath)
 

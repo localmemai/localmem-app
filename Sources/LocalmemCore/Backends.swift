@@ -180,42 +180,213 @@ public struct AgentCLIVerifier: FactVerifier {
 
 // MARK: - Apple on-device backends
 
+/// Sizing for the on-device model, whose context window is 4,096 tokens for
+/// input AND output combined (measured; the framework reports the same limit
+/// in `exceededContextWindowSize` errors). Chunks leave headroom for the
+/// rubric, the injected response schema, the candidate list, and the answer.
+public enum AppleModelLimits {
+    public static let chunkChars = 6_000
+    public static let maxCandidatesPerCall = 12
+    /// How many times an over-budget call may halve its chunk before giving
+    /// up — 2 halvings put even token-dense text (~1 char/token) in budget.
+    static let maxSplitDepth = 2
+}
+
 #if canImport(FoundationModels)
+
+/// Guided-generation shapes: constrained decoding guarantees well-formed
+/// output, so the malformed-JSON failure mode of the free-text path (#20)
+/// cannot occur. Types are strings validated in code — `MemoryType` fallback
+/// mirrors `FactParsing`.
+@available(macOS 26, *)
+@Generable
+struct GeneratedFact {
+    @Guide(description: "Short noun phrase naming the fact, not 'Label: value'.")
+    var title: String
+    @Guide(description: "One full, self-contained sentence, third person, present tense.")
+    var content: String
+    @Guide(description: "One of: fact, preference, decision, project, note.")
+    var type: String
+    @Guide(description: "2-4 lowercase tags.")
+    var tags: [String]
+
+    var asExtractedFact: ExtractedFact {
+        ExtractedFact(
+            title: title, content: content,
+            type: MemoryType(rawValue: type.lowercased()) ?? .note,
+            tags: tags)
+    }
+}
+
+@available(macOS 26, *)
+@Generable
+struct GeneratedVerdict {
+    @Guide(description: "The candidate's index from the CANDIDATES list.")
+    var index: Int
+    @Guide(description: "One of: keep, revise, drop.")
+    var verdict: String
+    @Guide(description: "For revise or drop: a one-line reason. Empty for keep.")
+    var reason: String
+    @Guide(description: "For revise only: the repaired fact.")
+    var revision: GeneratedFact?
+}
+
+/// Pass 1 on the on-device model. The document is processed in chunks sized
+/// to the model's context window; a chunk that still overflows (token-dense
+/// text) is halved and retried.
 @available(macOS 26, *)
 public struct AppleFoundationExtractor: FactExtractor {
     public init() {}
 
     public func extract(from text: String, context: ExtractionContext) async throws -> [ExtractedFact] {
-        let session = LanguageModelSession()
-        let prompt = ExtractionPrompt.build(text: text, context: context)
+        var out: [ExtractedFact] = []
+        for chunk in TextChunking.chunks(of: text, maxChars: AppleModelLimits.chunkChars) {
+            out += try await Self.extract(chunk: chunk, context: context, depth: 0)
+        }
+        return out
+    }
+
+    private static func extract(chunk: String, context: ExtractionContext,
+                                depth: Int) async throws -> [ExtractedFact] {
+        let prompt = ExtractionPrompt.guided(text: chunk, context: context)
         do {
-            let response = try await session.respond(to: prompt)
-            return FactParsing.parse(response.content)
+            let session = LanguageModelSession()
+            let response = try await session.respond(to: prompt, generating: [GeneratedFact].self)
+            return response.content.map(\.asExtractedFact)
         } catch {
-            throw ExtractionError.failed(error.localizedDescription)
+            guard shouldSplit(error), depth < AppleModelLimits.maxSplitDepth else {
+                throw ExtractionError.failed(describeAppleError(error))
+            }
+            var out: [ExtractedFact] = []
+            for half in TextChunking.chunks(of: chunk, maxChars: max(1, chunk.count / 2)) {
+                out += try await extract(chunk: half, context: context, depth: depth + 1)
+            }
+            return out
         }
     }
 }
 
+/// Pass 2 on the on-device model. The whole document cannot fit next to the
+/// rubric and candidate list, so the text is re-chunked with the SAME
+/// parameters as Pass 1 and each candidate is judged against the chunk that best
+/// supports it (lexical overlap — candidates are near-verbatim derivatives of
+/// their source chunk).
 @available(macOS 26, *)
 public struct AppleFoundationVerifier: FactVerifier {
     public init() {}
 
     public func verify(candidates: [ExtractedFact], against text: String,
                        context: ExtractionContext) async throws -> [FactVerdict] {
-        let session = LanguageModelSession()
-        let prompt = VerificationPrompt.build(text: text, candidates: candidates, context: context)
-        let content: String
-        do {
-            content = try await session.respond(to: prompt).content
-        } catch {
-            throw ExtractionError.failed(error.localizedDescription)
+        let chunks = TextChunking.chunks(of: text, maxChars: AppleModelLimits.chunkChars)
+        guard !chunks.isEmpty else {
+            throw ExtractionError.invalidOutput("No text to verify candidates against.")
         }
-        guard let verdicts = VerdictParsing.parse(content, candidates: candidates) else {
-            throw ExtractionError.invalidOutput("Verifier output did not cover every candidate exactly once.")
+
+        var verdicts = [FactVerdict?](repeating: nil, count: candidates.count)
+        for (chunkIndex, group) in TextChunking.assign(candidates: candidates, toChunks: chunks).enumerated() {
+            var batch: [Int] = []
+            for index in group {
+                batch.append(index)
+                if batch.count == AppleModelLimits.maxCandidatesPerCall {
+                    try await Self.verify(batch: batch, from: candidates, against: chunks[chunkIndex],
+                                          context: context, into: &verdicts)
+                    batch = []
+                }
+            }
+            if !batch.isEmpty {
+                try await Self.verify(batch: batch, from: candidates, against: chunks[chunkIndex],
+                                      context: context, into: &verdicts)
+            }
         }
-        return verdicts
+
+        return try verdicts.map {
+            guard let verdict = $0 else {
+                throw ExtractionError.invalidOutput("Verifier output did not cover every candidate exactly once.")
+            }
+            return verdict
+        }
     }
+
+    /// One guided call: judge `batch` (indices into `candidates`) against one
+    /// chunk, writing results into `verdicts` at their original positions.
+    ///
+    /// Guided generation guarantees well-formed rows but not index bookkeeping
+    /// — the small model sometimes skips, duplicates, or misnumbers a
+    /// candidate. Rather than failing the file, any candidate the batched
+    /// call did not cover cleanly is re-judged alone: a single-candidate call
+    /// has no indices to get wrong, so coverage is guaranteed by construction.
+    private static func verify(batch: [Int], from candidates: [ExtractedFact], against chunk: String,
+                               context: ExtractionContext, into verdicts: inout [FactVerdict?]) async throws {
+        let subset = batch.map { candidates[$0] }
+        let prompt = VerificationPrompt.guided(text: chunk, candidates: subset, context: context)
+        var seen = Set<Int>()
+        do {
+            let session = LanguageModelSession()
+            let rows = try await session.respond(to: prompt, generating: [GeneratedVerdict].self).content
+            for row in rows where subset.indices.contains(row.index) && !seen.contains(row.index) {
+                seen.insert(row.index)
+                verdicts[batch[row.index]] = verdict(from: row, candidate: subset[row.index])
+            }
+        } catch {
+            throw ExtractionError.failed(describeAppleError(error))
+        }
+
+        for (local, global) in batch.enumerated() where !seen.contains(local) {
+            verdicts[global] = try await verifyAlone(candidates[global], against: chunk, context: context)
+        }
+    }
+
+    /// Repair path: one candidate, one call, the row's index ignored.
+    private static func verifyAlone(_ candidate: ExtractedFact, against chunk: String,
+                                    context: ExtractionContext) async throws -> FactVerdict {
+        let prompt = VerificationPrompt.guided(text: chunk, candidates: [candidate], context: context)
+        do {
+            let session = LanguageModelSession()
+            let row = try await session.respond(to: prompt, generating: GeneratedVerdict.self).content
+            return verdict(from: row, candidate: candidate)
+        } catch {
+            throw ExtractionError.failed(describeAppleError(error))
+        }
+    }
+
+    private static func verdict(from row: GeneratedVerdict, candidate: ExtractedFact) -> FactVerdict {
+        switch row.verdict.lowercased() {
+        case "revise":
+            // A revise without a usable revision still means "worth keeping".
+            guard let revision = row.revision,
+                  !revision.title.isEmpty, !revision.content.isEmpty else { return .keep }
+            return .revise(revision.asExtractedFact)
+        case "drop":
+            return .drop(reason: row.reason.isEmpty ? "dropped by verifier" : row.reason)
+        default:
+            return .keep
+        }
+    }
+}
+
+/// Human-readable message for FoundationModels errors — the framework's
+/// `localizedDescription` is often just the enum case name.
+@available(macOS 26, *)
+private func describeAppleError(_ error: Error) -> String {
+    if let e = error as? LanguageModelSession.GenerationError {
+        switch e {
+        case .exceededContextWindowSize:
+            return "The document section was too large for the on-device model's context window."
+        case .guardrailViolation:
+            return "The on-device model's safety guardrails declined this content. Try a CLI agent backend for this file."
+        default:
+            return String(describing: e)
+        }
+    }
+    return error.localizedDescription
+}
+
+/// Whether an error is the context-window overflow that a smaller chunk fixes.
+@available(macOS 26, *)
+private func shouldSplit(_ error: Error) -> Bool {
+    if let e = error as? LanguageModelSession.GenerationError,
+       case .exceededContextWindowSize = e { return true }
+    return false
 }
 #endif
 
