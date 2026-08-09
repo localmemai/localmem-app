@@ -685,13 +685,24 @@ writes. Esc cancels, ⌘S saves.
 Unknown sources hash to one of three muted neutrals. The same color language is
 reused in the audit trail and status bar.
 
-### Status bar & popover
+### Status bar
 
-Always-visible 28pt bar: health dot (green/yellow/red), connected clients (capped
-at 3 + `+N`, each in its source color), relative last-access (ticks every
-second), total memory count, and a `▴` that opens a popover with daemon health,
-DB path/size, connected clients, the last 10 activity rows, and
-Restart-daemon / Open-logs actions.
+Always-visible 52pt footer of five equal-width `StatusSegment` cells, each a
+glyph plus a title and a detail line, driven by `VaultStatusViewModel` polling
+once a second:
+
+| Cell | Shows |
+|---|---|
+| Version & updates | See below — the only interactive cell |
+| Connected Agents | MCP actors seen in the activity log, or "None" |
+| Cloud Sync | Off (CloudKit is future work) |
+| Companion App | Not connected (iPhone companion is future work) |
+| Last Activity | Relative time of the newest access event |
+
+> An earlier design here specified a 28pt bar with a health dot, a capped client
+> list, a memory count, and a `▴` popover carrying daemon health, DB path/size,
+> recent activity, and Restart-daemon / Open-logs actions. None of that shipped;
+> the popover does not exist. The cells above are what the code renders.
 
 ### Version & update cell (footer)
 
@@ -725,7 +736,17 @@ code path (§12).
 
 ### Settings
 
-Single-page grouped view: **Appearance** (theme chips: System, Light, Dark), **Software Updates** (automatic check toggle & manual check button), **Vault Storage** (dynamic SQLite path & Reveal in Finder button), **About & Links** (version `v1.0.1`, GitHub, Website `https://localmem.ai`).
+Single-page grouped view, opened as a window via the `openSettings` environment
+action — never as a sheet, which produced two Settings at once and a copy with
+no way to dismiss it:
+
+- **Appearance** — theme chips (System, Light, Dark).
+- **Software Updates** — the `autoCheckForUpdates` toggle and a manual
+  **Check Now**.
+- **Vault Storage** — resolved SQLite path, Reveal in Finder.
+- **About & Links** — version, GitHub, Website, Privacy. The privacy link sits
+  here deliberately: this is the screen holding the update toggle, so it is
+  where someone asks what the check actually sends.
 
 ### Keyboard shortcuts
 
