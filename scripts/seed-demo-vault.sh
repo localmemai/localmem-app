@@ -95,5 +95,48 @@ log "Setting agent visibility…"
 lm agents set claude-code --all
 lm agents set cursor --non-sensitive-only
 
+# ---- agent traffic ------------------------------------------------------------
+# Everything above is written by the CLI, which the audit log correctly
+# attributes to "user". That left the status bar reading "Connected Agents:
+# None" and the Overview's "Recent Agent Activity" panel listing CLI writes —
+# an app whose entire subject is agent memory, screenshotted with no agents in
+# it.
+#
+# Real agent rows do not need a real agent. The MCP server identifies its caller
+# from `clientInfo` in the initialize handshake, so driving it over stdin
+# produces genuine, correctly attributed traffic with no API key, no model, and
+# no run-to-run variation.
+mcp_session() {
+	local client="$1"; shift
+	{
+		printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"$client\",\"version\":\"1.0\"}}}"
+		sleep 1
+		printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+		local id=2
+		for args in "$@"; do
+			printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":$args}"
+			id=$((id + 1))
+		done
+		# The server answers asynchronously; closing stdin early kills it first.
+		sleep 2
+	} | "$BIN/localmem-mcp" >/dev/null 2>&1 || true
+}
+
+log "Generating agent activity…"
+mcp_session claude-code \
+	'{"name":"memory_search","arguments":{"query":"coffee"}}' \
+	'{"name":"memory_search","arguments":{"query":"deploy"}}' \
+	'{"name":"memory_recent","arguments":{"limit":5}}'
+mcp_session codex \
+	'{"name":"memory_search","arguments":{"query":"swift"}}'
+# Cursor is restricted to non-sensitive folders, so this search is filtered and
+# returns nothing from Acme Corp. Note it logs as an ordinary `memory_search`:
+# filtering happens, but is not yet recorded as a distinct event, so the
+# Overview's "Blocked" card stays at 0 and the audit log cannot show the
+# enforcement. Worth revisiting — a denied read is the single most valuable row
+# this product could put in front of a user.
+mcp_session cursor \
+	'{"name":"memory_search","arguments":{"query":"Acme"}}'
+
 COUNT="$("$BIN/localmem" list --limit 100 --json | /usr/bin/python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
 log "Done. $COUNT memories in $VAULT_DIR"

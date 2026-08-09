@@ -43,9 +43,16 @@ Two things the automation **cannot** check for you. Both are below.
    ```
 
    Seeds a fictional vault and captures each screen against it, so nothing
-   personal is ever photographed. Requires Screen Recording permission; macOS
-   prompts on the first attempt, but only when the request comes from a terminal
-   with a UI — from a background helper it fails silently.
+   personal is ever photographed — the script refuses to run if pointed at the
+   real vault, since Settings displays the vault path and the memories speak for
+   themselves. Requires Screen Recording permission; macOS prompts on the first
+   attempt, but only when the request comes from a terminal with a UI — from a
+   background helper it fails silently.
+
+   **The agent-usage panel on the site is markup, not screenshots**, and should
+   stay that way. A real captured session publishes whatever it happened to
+   contain — working directory, account details in the client's own chrome,
+   scrollback — and every refresh reopens that risk.
 
    Screenshots rot quietly, and stale ones are worse than none: `vault.png` once
    sat beside a caption promising folders while showing a build that had none,

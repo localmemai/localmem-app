@@ -171,7 +171,19 @@
       <p style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#6b7185;margin:22px 0 0;letter-spacing:0.01em">macOS only · open-source core · 100% on-device storage · no account, no telemetry</p>
     </section>
 
-    <!-- TERMINAL CAROUSEL -->
+    <!-- TERMINAL CAROUSEL
+         Hand-built markup, not screenshots, and deliberately so. Capturing a
+         real Claude Code or Codex session puts whatever that session happened
+         to contain on a public page — working directory, account details in the
+         client's own chrome, whatever sits in the scrollback — and every
+         refresh reopens that risk. These frames cannot leak anything, read more
+         clearly than real agent output (which is dense with tool-call chrome),
+         and never go stale.
+
+         The app screenshots below carry the same guarantee by a different
+         route: they are captured against a seeded demo vault, never the
+         developer's own — see scripts/screenshots.sh, which refuses to run
+         against the real one. -->
     <section style="padding:24px 0 20px">
       <div class="lm-carousel" style="max-width:760px">
         <button class="lm-arrow prev" aria-label="Previous example">‹</button>
