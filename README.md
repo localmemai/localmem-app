@@ -150,6 +150,27 @@ app UI, and distribution plan live in the
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Privacy
+
+Your memories never leave your Mac. The app makes exactly two network
+connections, both to GitHub and both about software updates — checking whether a
+newer release exists, and downloading it. The automatic check is opt-in during
+setup and can be turned off; the CLI and MCP server make no network calls at
+all. There is no telemetry, no analytics, and no identifier of any kind.
+
+The one case where content leaves your machine is importing files with an agent
+extraction backend (Claude Code or Codex) instead of the on-device model — you
+choose the backend before selecting files, and there is no silent fallback.
+
+Full detail: [localmem.ai/privacy](https://localmem.ai/privacy), and
+[§5 of the technical design](docs/Technical_Design.md).
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md). Tagging is the release; two steps it can't
+check for you are bumping `LocalmemVersion.current` and giving security releases
+a `## Security` heading, which the app's update check reads.
+
 ## License
 
 Localmem is open-core — see [LICENSING.md](LICENSING.md) for the full picture:

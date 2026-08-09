@@ -202,6 +202,11 @@ struct SettingsView: View {
                 Link(destination: URL(string: "https://localmem.ai")!) {
                     Label("Website", systemImage: "globe")
                 }
+                // Reachable from the screen that holds the update toggle — the
+                // one place a user asks what the check actually sends.
+                Link(destination: URL(string: "https://localmem.ai/privacy")!) {
+                    Label("Privacy", systemImage: "hand.raised")
+                }
                 Spacer()
             }
             .font(.caption)

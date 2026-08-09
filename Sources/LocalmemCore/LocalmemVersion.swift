@@ -12,6 +12,7 @@ import Foundation
 /// Also at tag time: if the release fixes a security issue, the notes need a
 /// `## Security` heading. Nothing in the GitHub API reports that, so the app's
 /// update check reads the heading — omit it and users are never told (§12).
+/// The full checklist is in `RELEASING.md`.
 public enum LocalmemVersion {
     public static let current = "1.0.1"
 }
