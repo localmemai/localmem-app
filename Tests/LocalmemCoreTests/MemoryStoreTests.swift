@@ -245,10 +245,16 @@ struct MemoryStoreTests {
         #expect(summary.skipped == 0)
 
         // The destination is now an exact replica of the source: same ids,
-        // fields, tags, exclusions, and (fractional-second) timestamps. Memory's
-        // Equatable + the store's stable ordering make this a strict check.
-        let original = try await source.all()
-        let restored = try await destination.all()
+        // fields, tags, exclusions, and (fractional-second) timestamps. Compare
+        // id-sorted rather than in `all()` order: `all()` breaks a created_at tie
+        // by rowid (insertion order), which import legitimately reassigns, so the
+        // two vaults can list a same-millisecond tie in a different order without
+        // any data differing. Sorting by the stable, preserved `id` keeps this a
+        // strict byte-for-byte fidelity check (via Memory's Equatable) without
+        // asserting a cross-store array order that isn't a real invariant.
+        let byID: (Memory, Memory) -> Bool = { $0.id.uuidString < $1.id.uuidString }
+        let original = try await source.all().sorted(by: byID)
+        let restored = try await destination.all().sorted(by: byID)
         #expect(restored == original)
 
         // Re-importing the same file is idempotent — nothing duplicated.
