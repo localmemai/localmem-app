@@ -579,12 +579,14 @@ private struct WizardBullet: View {
 
 private struct WizardProtectScreen: View {
     @Bindable var model: SetupWizardModel
+    @AppStorage("autoCheckForUpdates") private var autoCheckForUpdates = true
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             WizardHero(symbol: "lock.shield")
-            Text("Protect your vault")
+            Text("Protect vault & updates")
                 .font(.largeTitle.weight(.bold))
-            Text("Lock Localmem behind Touch ID so only you can open the vault and change what your agents can see. You can toggle this anytime from the status bar.")
+            Text("Configure security preferences and software update behavior for your Localmem vault.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -602,6 +604,23 @@ private struct WizardProtectScreen: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $autoCheckForUpdates) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Automatically check for updates")
+                            .font(.callout.weight(.medium))
+                        Text("Periodically query GitHub Releases for new Localmem versions without sending telemetry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+
             Spacer()
         }
         .padding(28)

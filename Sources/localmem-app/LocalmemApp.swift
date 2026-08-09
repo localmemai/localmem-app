@@ -51,11 +51,17 @@ struct LocalmemApp: App {
                 .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task {
+                        await UpdateChecker.shared.checkForUpdates(userInitiated: true)
+                    }
+                }
+            }
+        }
 
-        // Standard macOS Settings window (⌘,) — currently just the theme
-        // picker. The LOCALMEM_APPEARANCE env hook above still wins when set
-        // (it pins NSApplication.appearance, which overrides the per-window
-        // color scheme) so screenshot tooling stays deterministic.
+        // Standard macOS Settings window (⌘,)
         Settings {
             SettingsView()
         }
@@ -89,18 +95,191 @@ enum AppAppearance: String, CaseIterable {
 
 struct SettingsView: View {
     @AppStorage("appearance") private var appearance = AppAppearance.system.rawValue
+    @AppStorage("autoCheckForUpdates") private var autoCheckForUpdates = true
+    @State private var updateChecker = UpdateChecker.shared
 
     var body: some View {
-        Form {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(AppAppearance.allCases, id: \.rawValue) { choice in
-                    Text(choice.label).tag(choice.rawValue)
+        VStack(spacing: 12) {
+            // Header
+            HStack(spacing: 10) {
+                LocalmemMark(size: 32)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("Localmem Settings").font(.headline.weight(.bold))
+                        Text("v\(LocalmemVersion.current)")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    Text("Private AI Memory Vault").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.bottom, 2)
+
+            Divider()
+
+            // Appearance chips section
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Appearance", systemImage: "paintpalette.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.purple)
+
+                HStack(spacing: 8) {
+                    ForEach(AppAppearance.allCases, id: \.rawValue) { option in
+                        ThemeChip(
+                            option: option,
+                            isSelected: appearance == option.rawValue,
+                            onSelect: { appearance = option.rawValue }
+                        )
+                    }
                 }
             }
-            .pickerStyle(.segmented)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+
+            // Software Updates section
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Software Updates", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.blue)
+
+                Toggle("Check for updates automatically", isOn: $autoCheckForUpdates)
+                    .font(.callout)
+
+                HStack {
+                    updateStatusBadge
+                    Spacer()
+                    Button(updateChecker.status == .checking ? "Checking..." : "Check Now") {
+                        Task {
+                            await updateChecker.checkForUpdates(userInitiated: true)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(updateChecker.status == .checking)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+
+            // Vault Storage section
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Vault Storage", systemImage: "externaldrive.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.cyan)
+
+                HStack {
+                    Text(dbDisplayPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospaced()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Reveal in Finder") {
+                        if let dbURL = try? Paths.databaseURL() {
+                            NSWorkspace.shared.selectFile(dbURL.path, inFileViewerRootedAtPath: dbURL.deletingLastPathComponent().path)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+
+            // Footer Links
+            HStack(spacing: 12) {
+                Link(destination: URL(string: "https://github.com/localmemai/localmem-app")!) {
+                    Label("GitHub", systemImage: "link")
+                }
+                Link(destination: URL(string: "https://localmem.ai")!) {
+                    Label("Website", systemImage: "globe")
+                }
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.top, 2)
         }
-        .padding(20)
-        .frame(width: 360)
+        .padding(16)
+        .frame(width: 420)
+        .background(.background)
+        .sheet(isPresented: $updateChecker.showUpdateModal) {
+            if case .updateAvailable(let release, let isSecurity) = updateChecker.status {
+                UpdateModalView(release: release, isSecurityFix: isSecurity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var updateStatusBadge: some View {
+        switch updateChecker.status {
+        case .idle:
+            Text("Ready").font(.caption).foregroundStyle(.secondary)
+        case .checking:
+            Text("Checking…").font(.caption).foregroundStyle(.secondary)
+        case .upToDate:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Up to date").font(.caption.weight(.medium))
+            }
+        case .updateAvailable(let rel, _):
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                Text("v\(rel.cleanVersion) ready").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+            }
+        case .failed:
+            Text("Check failed").font(.caption).foregroundStyle(.red)
+        }
+    }
+
+    private var dbDisplayPath: String {
+        if let url = try? Paths.databaseURL() {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            if url.path.hasPrefix(home) {
+                return "~" + url.path.dropFirst(home.count)
+            }
+            return url.path
+        }
+        return "~/Library/Application Support/Localmem/localmem.sqlite3"
+    }
+}
+
+private struct ThemeChip: View {
+    let option: AppAppearance
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var icon: String {
+        switch option {
+        case .system: return "desktopcomputer"
+        case .light:  return "sun.max.fill"
+        case .dark:   return "moon.stars.fill"
+        }
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption)
+                Text(option.label)
+                    .font(.caption.weight(isSelected ? .semibold : .regular))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
+            .overlay(Capsule().stroke(isSelected ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 1))
+            .foregroundStyle(isSelected ? Color.accentColor : .primary)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -717,13 +896,13 @@ final class VaultStatusViewModel {
 enum SheetKind: Identifiable {
     case newMemory(initialFolderID: UUID?)
     case editMemory(Memory)
-
+    case settings
 
     var id: String {
         switch self {
         case .newMemory:                 return "new"
         case .editMemory(let memory):    return "edit-\(memory.id)"
-
+        case .settings:                  return "settings"
         }
     }
 }
@@ -865,6 +1044,7 @@ struct ContentView: View {
     @State private var showSetupWizard = false
     @State private var wizardMode: SetupWizardMode = .firstRun
     @State private var portabilityAlert: PortabilityAlert?
+    @State private var updateChecker = UpdateChecker.shared
 
     var body: some View {
         // Two-level layout so the status bar spans the full window width:
@@ -892,6 +1072,7 @@ struct ContentView: View {
                             withAnimation(.snappy) { sidebarCollapsed.toggle() }
                         },
                         onNewMemory: { sheet = .newMemory(initialFolderID: selectedFolderID) },
+                        onOpenSettings: { sheet = .settings },
                         onLock: { statusVM?.setLocked(true) },
                         onExport: exportMemories,
                         onImport: importMemories,
@@ -969,6 +1150,7 @@ struct ContentView: View {
         }
         .background { sectionShortcuts }
         .onAppear {
+            Task { await updateChecker.checkOnLaunchIfDue() }
             // Screenshot/testing hooks: `LOCALMEM_SHOW_WIZARD=1` forces the
             // setup wizard open; `LOCALMEM_INITIAL_SECTION` (screenshot mode)
             // suppresses the first-run wizard so a specific section is visible.
@@ -1074,10 +1256,17 @@ struct ContentView: View {
                         selectedComingSoon = nil
                     }
                 }
+            case .settings:
+                SettingsView()
             }
         }
         .alert(item: $portabilityAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
+        }
+        .sheet(isPresented: $updateChecker.showUpdateModal) {
+            if case .updateAvailable(let release, let isSecurity) = updateChecker.status {
+                UpdateModalView(release: release, isSecurityFix: isSecurity)
+            }
         }
     }
 
@@ -1251,6 +1440,8 @@ struct BrandHeader: View {
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 8)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { performTitlebarDoubleClickAction() }
     }
 }
 
@@ -1372,6 +1563,7 @@ struct TopToolbar: View {
     let sidebarCollapsed: Bool
     let onToggleSidebar: () -> Void
     let onNewMemory: () -> Void
+    let onOpenSettings: () -> Void
     let onLock: () -> Void
     let onExport: () -> Void
     let onImport: () -> Void
@@ -1400,9 +1592,18 @@ struct TopToolbar: View {
 
             Spacer()
 
+            Button(action: openSettings) {
+                Image(systemName: "gearshape")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Settings (⌘,)")
+
             Button(action: onLock) {
                 Image(systemName: "lock")
+                    .foregroundStyle(.secondary)
             }
+            .buttonStyle(.plain)
             .help("Lock the vault")
             .keyboardShortcut("l", modifiers: .command)
 
@@ -1410,13 +1611,13 @@ struct TopToolbar: View {
                 Button("Export Memories…", action: onExport)
                 Button("Import Memories…", action: onImport)
             } label: {
-                Label("Import / Export", systemImage: "tray.and.arrow.up")
-                    .labelStyle(.titleAndIcon)
+                Image(systemName: "tray.and.arrow.up")
+                    .foregroundStyle(.secondary)
             }
-            .menuStyle(.button)
-            .buttonStyle(.bordered)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .fixedSize()
-            .help("Import or export memories")
+            .help("Import or Export memories")
 
             Button("+ New Memory", action: onNewMemory)
                 .buttonStyle(.borderedProminent)
@@ -1424,6 +1625,11 @@ struct TopToolbar: View {
         }
         .padding(.leading, leadingInset)
         .padding(.trailing, 16)
+    }
+
+    private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        onOpenSettings()
     }
 }
 
@@ -3722,16 +3928,12 @@ struct LockScreen: View {
 
 struct StatusBar: View {
     let vm: VaultStatusViewModel
+    @State private var updateChecker = UpdateChecker.shared
 
     var body: some View {
         HStack(spacing: 0) {
-            StatusSegment(
-                glyph: vm.vaultLocked ? "lock.fill" : "lock.open",
-                glyphColor: vm.vaultLocked ? .red : .green,
-                title: vm.vaultLocked ? "Locked" : "Unlocked",
-                detail: vm.vaultLocked ? "Touch ID required" : "Touch ID on"
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
+            versionSegment
+                .frame(maxWidth: .infinity, alignment: .leading)
             connectedSegment
                 .frame(maxWidth: .infinity, alignment: .center)
             cloudSyncSegment
@@ -3742,6 +3944,43 @@ struct StatusBar: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 20)
+    }
+
+    private var versionSegment: some View {
+        let (glyph, glyphColor, title, detail) = versionSegmentContent(for: updateChecker.status)
+
+        return Button {
+            if case .updateAvailable = updateChecker.status {
+                updateChecker.showUpdateModal = true
+            } else {
+                Task {
+                    await updateChecker.checkForUpdates(userInitiated: true)
+                }
+            }
+        } label: {
+            StatusSegment(
+                glyph: glyph,
+                glyphColor: glyphColor,
+                title: title,
+                detail: detail
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func versionSegmentContent(for status: UpdateChecker.Status) -> (glyph: String, glyphColor: Color, title: String, detail: String) {
+        switch status {
+        case .idle:
+            return ("checkmark.seal", .secondary, "Localmem \(LocalmemVersion.current)", "Check for updates")
+        case .checking:
+            return ("checkmark.seal", .secondary, "Localmem \(LocalmemVersion.current)", "Checking…")
+        case .upToDate:
+            return ("checkmark.seal", .green, "Localmem \(LocalmemVersion.current)", "Up to date")
+        case .failed:
+            return ("checkmark.seal", .secondary, "Localmem \(LocalmemVersion.current)", "Check failed")
+        case .updateAvailable(let rel, _):
+            return ("arrow.down.circle.fill", .accentColor, "Update available", "v\(rel.cleanVersion) — Download")
+        }
     }
 
     private var connectedSegment: some View {
