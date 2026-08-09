@@ -22,6 +22,25 @@ SETTLE="${SETTLE:-6}"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
+# These images get published. Capturing the real vault would put the developer's
+# own memories — and their home directory path, which Settings displays — on a
+# public web page. The demo vault is what makes that impossible, so refuse to
+# run without it rather than trusting whoever edits this next.
+REAL_VAULT="$HOME/Library/Application Support/Localmem"
+if [ "$(cd "$VAULT_DIR" 2>/dev/null && pwd -P)" = "$(cd "$REAL_VAULT" 2>/dev/null && pwd -P)" ] \
+	|| [ -z "${VAULT_DIR//[[:space:]]/}" ]; then
+	cat >&2 <<-EOF
+		error: refusing to capture the real vault.
+
+		LOCALMEM_VAULT_DIR resolves to $VAULT_DIR, which is the vault you
+		actually use. These screenshots are published; capturing it would put
+		your own memories on localmem.ai.
+
+		Unset LOCALMEM_VAULT_DIR to use the default demo vault.
+	EOF
+	exit 1
+fi
+
 if [ "${1:-}" != "--no-seed" ]; then
 	"$REPO_ROOT/scripts/seed-demo-vault.sh" "$VAULT_DIR"
 fi
