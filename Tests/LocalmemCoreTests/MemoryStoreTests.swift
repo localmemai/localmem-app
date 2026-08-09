@@ -18,7 +18,7 @@ struct MemoryStoreTests {
         _ = try await store.add(content: "Hello world", type: .note, actorKind: .cli, actorID: "user")
         _ = try await store.add(content: "Second memory", type: .note, actorKind: .cli, actorID: "user")
 
-        let recent = try await store.recent(limit: 10)
+        let recent = try await store.recent(limit: 10).memories
         #expect(recent.count == 2)
         #expect(recent.first?.content == "") // Compact index has no content
         
@@ -33,14 +33,14 @@ struct MemoryStoreTests {
         _ = try await store.add(content: "The cat sat on the mat", type: .note, actorKind: .cli, actorID: "user")
         _ = try await store.add(content: "Dogs are loyal", type: .note, actorKind: .cli, actorID: "user")
 
-        let hits = try await store.search(query: "cat")
+        let hits = try await store.search(query: "cat").memories
         #expect(hits.count == 1)
         #expect(hits.first?.content == "") // Compact index has no content
         
         let full = try await store.get(id: hits.first!.id)
         #expect(full?.content.contains("cat") == true) // Full body fetched
 
-        let misses = try await store.search(query: "elephant")
+        let misses = try await store.search(query: "elephant").memories
         #expect(misses.isEmpty)
     }
 
@@ -57,9 +57,9 @@ struct MemoryStoreTests {
             tags: ["coffee", "drink", "morning_routine"],
             actorKind: .cli, actorID: "user"
         )
-        #expect(try await store.search(query: "coffee").map(\.id) == [memory.id])
+        #expect(try await store.search(query: "coffee").memories.map(\.id) == [memory.id])
         // snake_case tags tokenize on the underscore, so the broad term hits too.
-        #expect(try await store.search(query: "routine").map(\.id) == [memory.id])
+        #expect(try await store.search(query: "routine").memories.map(\.id) == [memory.id])
     }
 
     @Test func updateReindexesTagsForSearch() async throws {
@@ -80,12 +80,12 @@ struct MemoryStoreTests {
             actorKind: .cli, actorID: "user"
         )
         // The replaced tag stops matching; the new one starts.
-        #expect(try await store.search(query: "coffee").isEmpty)
-        #expect(try await store.search(query: "espresso").map(\.id) == [memory.id])
+        #expect(try await store.search(query: "coffee").memories.isEmpty)
+        #expect(try await store.search(query: "espresso").memories.map(\.id) == [memory.id])
 
         // And a deleted memory's tags leave the index with it.
         _ = try await store.delete(id: memory.id, actorKind: .cli, actorID: "user")
-        #expect(try await store.search(query: "espresso").isEmpty)
+        #expect(try await store.search(query: "espresso").memories.isEmpty)
     }
 
     @Test func getById() async throws {
@@ -156,7 +156,6 @@ struct MemoryStoreTests {
             title: "Editor",
             content: "Uses Cursor.",
             tags: ["editor", "tools"],
-            excludedAgents: ["blocked-agent"],
             source: "other-machine",
             createdAt: Date(timeIntervalSince1970: 1_000_000),
             updatedAt: Date(timeIntervalSince1970: 2_000_000)
@@ -177,7 +176,6 @@ struct MemoryStoreTests {
         #expect(fetched.title == "Editor")
         #expect(fetched.content == "Uses Cursor.")
         #expect(Set(fetched.tags) == ["editor", "tools"])
-        #expect(fetched.excludedAgents == ["blocked-agent"])
         #expect(fetched.source == "other-machine")
         #expect(fetched.createdAt == incoming.createdAt)
 
@@ -212,14 +210,13 @@ struct MemoryStoreTests {
             try? FileManager.default.removeItem(at: file)
         }
 
-        // A vault with the full spread of fields: tags, per-agent exclusions,
-        // every memory type, an untitled note, and multi-byte content.
+        // A vault with the full spread of fields: tags, every memory type,
+        // an untitled note, and multi-byte content.
         _ = try await source.add(
             content: "Prefers flat white with oat milk. ☕️",
             type: .preference,
             title: "Coffee",
             tags: ["coffee", "drink"],
-            excludedAgents: ["nosy-agent"],
             actorKind: .cli,
             actorID: "user"
         )
@@ -316,7 +313,7 @@ struct MemoryStoreTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         _ = try await store.add(content: "anything", type: .note, actorKind: .cli, actorID: "user")
-        let hits = try await store.search(query: "   ")
+        let hits = try await store.search(query: "   ").memories
         #expect(hits.isEmpty)
     }
 
@@ -328,16 +325,16 @@ struct MemoryStoreTests {
                                 title: "Coffee preference", actorKind: .cli, actorID: "user")
 
         // Live-typing scenario: user types "cof" — must hit "coffee" already.
-        let prefix = try await store.search(query: "cof")
+        let prefix = try await store.search(query: "cof").memories
         #expect(prefix.count == 1)
 
         // Multi-token AND: "cof pref" hits the same memory because the
         // title contains words starting with both prefixes.
-        let multi = try await store.search(query: "cof pref")
+        let multi = try await store.search(query: "cof pref").memories
         #expect(multi.count == 1)
 
         // Non-matching prefix returns nothing.
-        let miss = try await store.search(query: "xyz")
+        let miss = try await store.search(query: "xyz").memories
         #expect(miss.isEmpty)
     }
 
@@ -373,7 +370,7 @@ struct MemoryStoreTests {
         #expect(Set(updated.tags) == ["coffee", "drink", "morning_routine"])
 
         // FTS index reflects the new content (new word "oat-milk").
-        let hits = try await store.search(query: "oat")
+        let hits = try await store.search(query: "oat").memories
         #expect(hits.first?.id == original.id)
 
         // Old tag no longer attached.
@@ -403,7 +400,7 @@ struct MemoryStoreTests {
 
         // Operators in user input must not blow up FTS5 parsing — they are
         // stripped and the rest of the query still works.
-        let hits = try await store.search(query: "coffee*(:^)")
+        let hits = try await store.search(query: "coffee*(:^)").memories
         #expect(hits.count == 1)
     }
 
@@ -420,294 +417,155 @@ struct MemoryStoreTests {
         )
 
         // Confirm it shows up via FTS before delete.
-        let before = try await store.search(query: "searchable")
+        let before = try await store.search(query: "searchable").memories
         #expect(before.count == 1)
 
         _ = try await store.delete(id: added.id, actorKind: .cli)
 
         // FTS trigger cleaned the index — no orphan hits.
-        let after = try await store.search(query: "searchable")
+        let after = try await store.search(query: "searchable").memories
         #expect(after.isEmpty)
     }
+    // MARK: - Folders and agent visibility
 
-    @Test func exclusionsRoundTripAndFilterReads() async throws {
+    private static let inboxID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    @Test func newMemoriesLandInInboxByDefault() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let added = try await store.add(
-            content: "Private coffee note",
-            type: .note,
-            excludedAgents: ["codex", " cursor ", "codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        let admin = try await store.get(id: added.id)
-        #expect(admin?.excludedAgents == ["codex", "cursor"])
-
-        let hidden = try await store.get(id: added.id, requestingAgent: "codex")
-        #expect(hidden == nil)
-
-        let visible = try await store.get(id: added.id, requestingAgent: "claude-code")
-        #expect(visible?.id == added.id)
+        let m = try await store.add(content: "unfiled", type: .note, actorKind: .cli, actorID: "user")
+        #expect(m.folderID == Self.inboxID)
     }
 
-    @Test func recentAndSearchApplyExclusionsBeforeLimit() async throws {
+    @Test func inboxRejectsRenameDeleteAndSensitivity() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(
-            content: "alpha",
-            type: .note,
-            excludedAgents: ["codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-        let visible = try await store.add(
-            content: "alpha bravo",
-            type: .note,
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        let searchHits = try await store.search(query: "alpha", limit: 1, requestingAgent: "codex")
-        #expect(searchHits.map(\.id) == [visible.id])
-
-        let recent = try await store.recent(limit: 10, requestingAgent: "codex")
-        #expect(recent.map(\.content).contains("alpha") == false)
-        #expect(recent.map(\.id).contains(visible.id))
-    }
-
-    @Test func unknownAgentsRemainDefaultOpen() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let added = try await store.add(
-            content: "Visible to future agents",
-            type: .note,
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        let visible = try await store.get(id: added.id, requestingAgent: "future-agent")
-        #expect(visible?.id == added.id)
-    }
-
-    @Test func updatePreservesExclusionsUnlessReplacementProvided() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let added = try await store.add(
-            content: "Original",
-            type: .note,
-            excludedAgents: ["codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        let preserved = try await store.update(
-            id: added.id,
-            content: "Updated",
-            type: .note,
-            actorKind: .cli,
-            actorID: "user"
-        )
-        #expect(preserved.excludedAgents == ["codex"])
-
-        let replaced = try await store.update(
-            id: added.id,
-            content: "Updated again",
-            type: .note,
-            excludedAgents: ["cursor"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-        #expect(replaced.excludedAgents == ["cursor"])
-    }
-
-    @Test func findIDsRespectsRequestingAgentExclusion() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let hidden = try await store.add(
-            content: "hidden from codex",
-            type: .note,
-            excludedAgents: ["codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        // Without a requesting agent, the admin path sees everything.
-        let adminMatches = try await store.findIDs(prefix: String(hidden.id.uuidString.prefix(8)))
-        #expect(adminMatches.contains(hidden.id))
-
-        // From codex's perspective the same prefix returns nothing.
-        let codexMatches = try await store.findIDs(
-            prefix: String(hidden.id.uuidString.prefix(8)),
-            requestingAgent: "codex"
-        )
-        #expect(codexMatches.contains(hidden.id) == false)
-    }
-
-    @Test func updateWithEmptyExclusionsClearsTheList() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let added = try await store.add(
-            content: "Initially restricted",
-            type: .note,
-            excludedAgents: ["codex", "cursor"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-        // Sanity: stored exclusions made it in normalised + sorted.
-        #expect(added.excludedAgents == ["codex", "cursor"])
-
-        // Passing `[]` is a deliberate "clear" — different from passing nil
-        // which preserves whatever was there.
-        let cleared = try await store.update(
-            id: added.id,
-            content: "Now public",
-            type: .note,
-            excludedAgents: [],
-            actorKind: .cli,
-            actorID: "user"
-        )
-        #expect(cleared.excludedAgents.isEmpty)
-
-        // The previously-excluded agent now sees the memory.
-        let codexView = try await store.get(id: added.id, requestingAgent: "codex")
-        #expect(codexView?.id == added.id)
-    }
-
-    @Test func addNormalizesEmptyAndWhitespaceExclusionStrings() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        // The store should silently drop empty strings, whitespace, and
-        // duplicates — the normalization function lives in MemoryStore and
-        // is reachable through `add`/`update`'s public surface only.
-        let added = try await store.add(
-            content: "trimmed exclusions",
-            type: .note,
-            excludedAgents: ["", "   ", " codex ", "codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-        #expect(added.excludedAgents == ["codex"])
-    }
-
-    @Test func deleteCascadesExclusions() async throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".sqlite3")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-
-        let database = try LocalmemDatabase(url: tmp)
-        let store = MemoryStore(database: database)
-        let added = try await store.add(
-            content: "Delete me",
-            type: .note,
-            excludedAgents: ["codex"],
-            actorKind: .cli,
-            actorID: "user"
-        )
-
-        _ = try await store.delete(id: added.id, actorKind: .cli, actorID: "user")
-
-        let rows = try await database.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT COUNT(*) FROM memory_agent_exclusions WHERE memory_id = ?",
-                arguments: [added.id.uuidString]
-            ) ?? 0
+        await #expect(throws: FolderError.self) {
+            _ = try await store.updateFolder(id: Self.inboxID, name: "Renamed", isSensitive: true)
         }
-        #expect(rows == 0)
+        await #expect(throws: FolderError.self) {
+            try await store.deleteFolder(id: Self.inboxID)
+        }
+        // And it stays open after the failed attempt.
+        let inbox = try #require(try await store.listFolders().first { $0.id == Self.inboxID })
+        #expect(inbox.isSensitive == false)
+        #expect(inbox.name == "Inbox")
     }
 
-    // MARK: - Agent-centric access management
-
-    @Test func memoriesExcludingListsBlockedForAgent() async throws {
+    @Test func sensitiveFoldersAreHiddenFromRestrictedAgentsOnly() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let hidden = try await store.add(content: "hidden from codex", type: .note,
-                                         excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
-        _ = try await store.add(content: "visible to all", type: .note, actorKind: .cli, actorID: "user")
-
-        let blocked = try await store.memoriesExcluding(agent: "codex")
-        #expect(blocked.map(\.id) == [hidden.id])
-        #expect(try await store.memoriesExcluding(agent: "cursor").isEmpty)
-    }
-
-    @Test func blockedCountsReportFilteredReads() async throws {
-        let (store, url) = try makeStore()
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        _ = try await store.add(content: "alpha hidden", type: .note,
-                                excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
-        _ = try await store.add(content: "alpha visible", type: .note,
+        let secret = try await store.createFolder(name: "Finance", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "brokerage alpha", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "public alpha", type: .note,
                                 actorKind: .cli, actorID: "user")
 
-        #expect(try await store.blockedRecentCount(limit: 10, requestingAgent: "codex") == 1)
-        #expect(try await store.blockedSearchCount(query: "alpha", limit: 10, requestingAgent: "codex") == 1)
-        #expect(try await store.blockedSearchCount(query: "alpha", limit: 10, requestingAgent: "cursor") == 0)
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        // Restricted agent sees only the open memory, and is told one was held back.
+        let restricted = try await store.search(query: "alpha", limit: 10, requestingAgent: "codex")
+        #expect(restricted.memories.count == 1)
+        #expect(restricted.memories.first?.folderID == Self.inboxID)
+        #expect(restricted.withheld == 1)
+
+        // An agent left at the default status sees both, with nothing withheld.
+        let open = try await store.search(query: "alpha", limit: 10, requestingAgent: "cursor")
+        #expect(open.memories.count == 2)
+        #expect(open.withheld == 0)
+
+        // recent applies the same filter.
+        let recent = try await store.recent(limit: 10, requestingAgent: "codex")
+        #expect(recent.memories.count == 1)
+        #expect(recent.withheld == 1)
     }
 
-    @Test func setExclusionTogglesSingleAgent() async throws {
+    @Test func unknownAgentsDefaultToFullAccess() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let m = try await store.add(content: "toggle me", type: .note, actorKind: .cli, actorID: "user")
+        let secret = try await store.createFolder(name: "Finance", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "brokerage", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
 
-        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: true, actorKind: .cli, actorID: "user"))
-        #expect(try await store.get(id: m.id, requestingAgent: "cursor") == nil)
-
-        // Idempotent re-add reports no change.
-        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: true, actorKind: .cli, actorID: "user") == false)
-
-        #expect(try await store.setExclusion(memoryID: m.id, agent: "cursor", excluded: false, actorKind: .cli, actorID: "user"))
-        #expect(try await store.get(id: m.id, requestingAgent: "cursor")?.id == m.id)
+        // An agent never seen before is `all` — installing a tool never hides anything.
+        let hits = try await store.search(query: "brokerage", limit: 10,
+                                          requestingAgent: "brand-new-agent")
+        #expect(hits.memories.count == 1)
+        #expect(hits.withheld == 0)
     }
 
-    @Test func grantAllAccessClearsAgentEverywhere() async throws {
+    @Test func markingAFolderSensitiveReclassifiesItsContents() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(content: "a", type: .note, excludedAgents: ["codex"], actorKind: .cli, actorID: "user")
-        _ = try await store.add(content: "b", type: .note, excludedAgents: ["codex", "cursor"], actorKind: .cli, actorID: "user")
+        let folder = try await store.createFolder(name: "Docs", kind: .manual,
+                                                  projectRoot: nil, isSensitive: false)
+        _ = try await store.add(content: "quarterly numbers", type: .fact,
+                                folderID: folder.id, actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
 
-        let cleared = try await store.grantAllAccess(toAgent: "codex", actorKind: .cli, actorID: "user")
-        #expect(cleared == 2)
-        #expect(try await store.memoriesExcluding(agent: "codex").isEmpty)
-        // Other agents' exclusions untouched.
-        #expect(try await store.memoriesExcluding(agent: "cursor").count == 1)
+        // Visible while the folder is open.
+        #expect(try await store.search(query: "quarterly", limit: 10,
+                                       requestingAgent: "codex").memories.count == 1)
+
+        // Flipping the folder hides every memory in it — no per-memory work.
+        _ = try await store.updateFolder(id: folder.id, name: "Docs", isSensitive: true)
+        #expect(try await store.search(query: "quarterly", limit: 10,
+                                       requestingAgent: "codex").memories.isEmpty)
     }
 
-    @Test func accessMethodsIgnoreBlankAgent() async throws {
+    @Test func movingAMemoryChangesWhoCanReadIt() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let m = try await store.add(content: "x", type: .note, actorKind: .cli, actorID: "user")
-        // Empty / whitespace agent ids are no-ops, never partial writes.
-        #expect(try await store.memoriesExcluding(agent: "   ").isEmpty)
-        #expect(try await store.setExclusion(memoryID: m.id, agent: "", excluded: true, actorKind: .cli, actorID: "user") == false)
-        #expect(try await store.grantAllAccess(toAgent: "  ", actorKind: .cli, actorID: "user") == 0)
-        #expect(try await store.revokeAllAccess(fromAgent: "", actorKind: .cli, actorID: "user") == 0)
-        // The memory is still visible to everyone — nothing was excluded.
-        #expect(try await store.get(id: m.id, requestingAgent: "codex")?.id == m.id)
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        let m = try await store.add(content: "movable", type: .note, actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        #expect(try await store.search(query: "movable", limit: 10,
+                                       requestingAgent: "codex").memories.count == 1)
+
+        _ = try await store.update(id: m.id, content: "movable", type: .note,
+                                   folderID: secret.id, actorKind: .cli, actorID: "user")
+        #expect(try await store.search(query: "movable", limit: 10,
+                                       requestingAgent: "codex").memories.isEmpty)
     }
 
-    @Test func revokeAllAccessExcludesAgentFromEveryMemory() async throws {
+    @Test func deletingAFolderReturnsItsMemoriesToInbox() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        _ = try await store.add(content: "a", type: .note, actorKind: .cli, actorID: "user")
-        _ = try await store.add(content: "b", type: .note, excludedAgents: ["cursor"], actorKind: .cli, actorID: "user")
+        let folder = try await store.createFolder(name: "Temp", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        let m = try await store.add(content: "orphan", type: .note,
+                                    folderID: folder.id, actorKind: .cli, actorID: "user")
 
-        let added = try await store.revokeAllAccess(fromAgent: "cursor", actorKind: .cli, actorID: "user")
-        #expect(added == 1) // only the memory that didn't already exclude cursor
-        #expect(try await store.memoriesExcluding(agent: "cursor").count == 2)
-        #expect(try await store.recent(limit: 10, requestingAgent: "cursor").isEmpty)
+        try await store.deleteFolder(id: folder.id)
+
+        // The memory survives, refiled — and is open again, since Inbox is never sensitive.
+        let fetched = try #require(try await store.get(id: m.id))
+        #expect(fetched.folderID == Self.inboxID)
+    }
+
+    @Test func resolveProjectFolderIsIdempotentPerGitRoot() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let a = try await store.resolveProjectFolder(gitRoot: "/tmp/work/api")
+        let b = try await store.resolveProjectFolder(gitRoot: "/tmp/work/api")
+        #expect(a.id == b.id)
+        #expect(a.isSensitive == false) // auto-created folders are always open
+
+        // Distinct roots that share a leaf name stay distinct folders.
+        let other = try await store.resolveProjectFolder(gitRoot: "/tmp/personal/api")
+        #expect(other.id != a.id)
     }
 
     // MARK: - Supersession
@@ -727,15 +585,15 @@ struct MemoryStoreTests {
         #expect(try await store.get(id: old.id)?.supersededBy == [new.id])
 
         // Default recent/search hide the superseded memory.
-        #expect(try await store.recent(limit: 10).map(\.id) == [new.id])
-        #expect(try await store.search(query: "approach").map(\.id) == [new.id])
+        #expect(try await store.recent(limit: 10).memories.map(\.id) == [new.id])
+        #expect(try await store.search(query: "approach").memories.map(\.id) == [new.id])
 
         // includeSuperseded surfaces it, de-ranked below the live entry.
-        let history = try await store.recent(limit: 10, requestingAgent: nil, includeSuperseded: true)
+        let history = try await store.recent(limit: 10, requestingAgent: nil, includeSuperseded: true).memories
         #expect(history.map(\.id) == [new.id, old.id])
         let searchHistory = try await store.search(query: "approach", limit: 10,
                                                    requestingAgent: nil, includeSuperseded: true)
-        #expect(searchHistory.map(\.id) == [new.id, old.id])
+        #expect(searchHistory.memories.map(\.id) == [new.id, old.id])
     }
 
     @Test func supersedeMethodLinksAndHides() async throws {
@@ -747,7 +605,7 @@ struct MemoryStoreTests {
 
         try await store.supersede(supersededID: old.id, supersedingID: new.id, actorKind: .cli)
 
-        #expect(try await store.recent(limit: 10).map(\.id) == [new.id])
+        #expect(try await store.recent(limit: 10).memories.map(\.id) == [new.id])
         #expect(try await store.get(id: old.id)?.supersededBy == [new.id])
         #expect(try await store.get(id: new.id)?.supersedes == [old.id])
     }
@@ -761,7 +619,7 @@ struct MemoryStoreTests {
             try await store.supersede(supersededID: m.id, supersedingID: m.id, actorKind: .cli)
         }
         // The memory stays live — no self-loop was written.
-        #expect(try await store.recent(limit: 10).map(\.id) == [m.id])
+        #expect(try await store.recent(limit: 10).memories.map(\.id) == [m.id])
     }
 
     /// The regression guard for the update-path bug: `supersedes` on `update`
@@ -776,24 +634,24 @@ struct MemoryStoreTests {
         let c = try await store.add(content: "C", type: .note, actorKind: .cli, actorID: "user")
 
         // All three live to start.
-        #expect(Set(try await store.recent(limit: 10).map(\.id)) == [a.id, b.id, c.id])
+        #expect(Set(try await store.recent(limit: 10).memories.map(\.id)) == [a.id, b.id, c.id])
 
         // SET: C supersedes A and B (previously a no-op).
         _ = try await store.update(id: c.id, content: "C replaces A and B", type: .note,
                                    supersedes: [a.id, b.id], actorKind: .cli, actorID: "user")
-        #expect(try await store.recent(limit: 10).map(\.id) == [c.id])
+        #expect(try await store.recent(limit: 10).memories.map(\.id) == [c.id])
         #expect(Set(try await store.get(id: c.id)?.supersedes ?? []) == [a.id, b.id])
 
         // KEEP: omitting supersedes on a later edit leaves the edges intact.
         _ = try await store.update(id: c.id, content: "C v2", type: .note,
                                    actorKind: .cli, actorID: "user")
-        #expect(try await store.recent(limit: 10).map(\.id) == [c.id])
+        #expect(try await store.recent(limit: 10).memories.map(\.id) == [c.id])
         #expect(Set(try await store.get(id: c.id)?.supersedes ?? []) == [a.id, b.id])
 
         // CLEAR: an explicit empty array drops the edges — A and B go live again.
         _ = try await store.update(id: c.id, content: "C v3", type: .note,
                                    supersedes: [], actorKind: .cli, actorID: "user")
-        #expect(Set(try await store.recent(limit: 10).map(\.id)) == [a.id, b.id, c.id])
+        #expect(Set(try await store.recent(limit: 10).memories.map(\.id)) == [a.id, b.id, c.id])
         #expect((try await store.get(id: c.id)?.supersedes ?? []).isEmpty)
     }
 
@@ -806,7 +664,7 @@ struct MemoryStoreTests {
                                       headline: "Current headline", supersedes: [old.id],
                                       actorKind: .cli, actorID: "user")
 
-        let recent = try #require(try await store.recent(limit: 10).first)
+        let recent = try #require(try await store.recent(limit: 10).memories.first)
         #expect(recent.id == new.id)
         #expect(recent.content == "")               // compact index omits the body
         #expect(recent.headline == "Current headline") // but keeps the index fields

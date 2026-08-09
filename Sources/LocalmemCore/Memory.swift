@@ -7,7 +7,8 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
     public var headline: String?
     public var content: String
     public var tags: [String]
-    public var excludedAgents: [String]
+    public var folderID: UUID
+    public var sessionID: String?
     /// Free-form identifier for whoever wrote the row. Mirrors `activity.actor_id`
     /// for the inline audit row created at the same time — nil for CLI writes
     /// that don't set `LOCALMEM_CLIENT_ID`, the MCP client name otherwise.
@@ -24,7 +25,8 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         headline: String? = nil,
         content: String,
         tags: [String] = [],
-        excludedAgents: [String] = [],
+        folderID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        sessionID: String? = nil,
         source: String? = nil,
         supersededBy: [UUID]? = nil,
         supersedes: [UUID]? = nil,
@@ -37,7 +39,8 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         self.headline = headline
         self.content = content
         self.tags = tags
-        self.excludedAgents = excludedAgents
+        self.folderID = folderID
+        self.sessionID = sessionID
         self.source = source
         self.supersededBy = supersededBy
         self.supersedes = supersedes

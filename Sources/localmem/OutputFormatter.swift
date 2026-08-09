@@ -34,7 +34,6 @@ enum OutputFormatter {
         if let title = memory.title { print("title:      \(title)") }
         if let headline = memory.headline { print("headline:   \(headline)") }
         if !memory.tags.isEmpty { print("tags:       \(memory.tags.joined(separator: ", "))") }
-        if !memory.excludedAgents.isEmpty { print("excluded:   \(memory.excludedAgents.joined(separator: ", "))") }
         if let supersededBy = memory.supersededBy, !supersededBy.isEmpty {
             print("superseded_by: \(supersededBy.map { $0.uuidString }.joined(separator: ", "))")
         }

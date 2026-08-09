@@ -107,14 +107,13 @@ struct SettingsView: View {
 // MARK: - Sections (Phase 2)
 
 enum AppSection: String, CaseIterable, Hashable {
-    case overview, memories, agents, access, audit, connectors
+    case overview, memories, agents, audit, connectors
 
     var label: String {
         switch self {
         case .overview:   "Overview"
         case .memories:   "Memories"
         case .agents:     "Agents"
-        case .access:     "Access Roster"
         case .audit:      "Audit Log"
         case .connectors: "Connectors"
         }
@@ -125,7 +124,6 @@ enum AppSection: String, CaseIterable, Hashable {
         case .overview:   "square.grid.2x2"
         case .memories:   "doc.text"
         case .agents:     "person.crop.square"
-        case .access:     "lock.shield"
         case .audit:      "list.bullet.rectangle"
         case .connectors: "point.3.connected.trianglepath.dotted"
         }
@@ -479,11 +477,49 @@ struct Pill: View {
 @Observable @MainActor
 final class MemoryStoreViewModel {
     private(set) var memories: [Memory] = []
+    private(set) var folders: [Folder] = []
+    private(set) var agents: [Agent] = []
+    private(set) var folderCounts: [UUID: Int] = [:]
     private(set) var loadError: String?
     private(set) var loadedMemories: [Memory.ID: Memory] = [:]
     private let store: MemoryStore
 
     init() throws { self.store = try MemoryStore() }
+
+    /// Children of each expanded folder, loaded on demand. Kept separate from
+    /// `memories` (the search/recent window) so a folder outside that window
+    /// still lists its contents.
+    private(set) var folderChildren: [UUID: [Memory]] = [:]
+
+    func loadFoldersAndAgents() async {
+        do {
+            folders = try await store.listFolders()
+            agents = try await store.listAgents()
+            folderCounts = (try? await store.getFolderCounts()) ?? [:]
+        } catch {
+            Log.error(.store, "Failed to load folders/agents", ["error": String(describing: error)])
+        }
+    }
+
+    func loadChildren(of folderID: UUID) async {
+        do {
+            folderChildren[folderID] = try await store.memories(inFolder: folderID)
+        } catch {
+            Log.error(.store, "Failed to load folder contents", [
+                "folder": folderID.uuidString,
+                "error": String(describing: error),
+            ])
+        }
+    }
+
+    /// Re-read the children of every folder already loaded. Call *after* any
+    /// write that can move a memory between folders — clearing the cache
+    /// without refilling it leaves expanded folders rendering as empty.
+    func refreshFolderChildren() async {
+        for id in Array(folderChildren.keys) {
+            await loadChildren(of: id)
+        }
+    }
 
     func loadFullMemoryIfNeeded(_ id: Memory.ID) async {
         guard loadedMemories[id] == nil else { return }
@@ -501,10 +537,13 @@ final class MemoryStoreViewModel {
     func search(_ query: String, limit: Int = 50) async {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         do {
-            memories = trimmed.isEmpty
+            let result = trimmed.isEmpty
                 ? try await store.recent(limit: limit)
                 : try await store.search(query: trimmed, limit: limit)
+            memories = result.memories
             loadError = nil
+            await loadFoldersAndAgents()
+            await refreshFolderChildren()
         } catch {
             memories = []
             loadError = String(describing: error)
@@ -517,14 +556,16 @@ final class MemoryStoreViewModel {
         type: MemoryType,
         content: String,
         tags: [String],
-        excludedAgents: [String] = []
+        folderID: UUID? = nil,
+        sessionID: String? = nil
     ) async throws -> Memory.ID {
         let memory = try await store.add(
             content: content,
             type: type,
             title: title?.isEmpty == false ? title : nil,
             tags: tags,
-            excludedAgents: excludedAgents,
+            folderID: folderID,
+            sessionID: sessionID,
             actorKind: .cli,
             actorID: "user"
         )
@@ -542,7 +583,7 @@ final class MemoryStoreViewModel {
         type: MemoryType,
         content: String,
         tags: [String],
-        excludedAgents: [String]? = nil
+        folderID: UUID? = nil
     ) async throws -> Memory {
         let updated = try await store.update(
             id: id,
@@ -550,7 +591,7 @@ final class MemoryStoreViewModel {
             type: type,
             title: title?.isEmpty == false ? title : nil,
             tags: tags,
-            excludedAgents: excludedAgents,
+            folderID: folderID,
             actorKind: .cli,
             actorID: "user"
         )
@@ -560,6 +601,7 @@ final class MemoryStoreViewModel {
 
     func delete(_ id: Memory.ID) async throws {
         _ = try await store.delete(id: id, actorKind: .cli, actorID: "user")
+        await refreshFolderChildren()
         await search("")
     }
 
@@ -567,6 +609,38 @@ final class MemoryStoreViewModel {
     func exportArchive() async throws -> Data {
         let all = try await store.all()
         return try MemoryArchive.encode(all)
+    }
+
+    func createFolder(name: String, isSensitive: Bool) async throws {
+        _ = try await store.createFolder(name: name, kind: .manual, projectRoot: nil, isSensitive: isSensitive)
+        await loadFoldersAndAgents()
+    }
+
+    func updateFolder(id: UUID, name: String, isSensitive: Bool) async throws {
+        _ = try await store.updateFolder(id: id, name: name, isSensitive: isSensitive)
+        await refreshFolderChildren()
+        await loadFoldersAndAgents()
+        await search("")
+    }
+
+    func deleteFolder(id: UUID) async throws {
+        try await store.deleteFolder(id: id)
+        await refreshFolderChildren()
+        await loadFoldersAndAgents()
+        await search("")
+    }
+
+    func mergeFolders(ids: [UUID], intoName: String) async throws {
+        _ = try await store.mergeFolders(ids: ids, intoName: intoName)
+        await refreshFolderChildren()
+        await loadFoldersAndAgents()
+        await search("")
+    }
+
+    func setAgentStatus(id: String, status: Agent.Status) async throws {
+        try await store.setAgentStatus(id: id, status: status)
+        await loadFoldersAndAgents()
+        await search("")
     }
 
     /// Parses an exported archive and merges it into the store (skipping ids
@@ -627,20 +701,122 @@ final class VaultStatusViewModel {
 /// modifier — easier to extend than a `showingX` `Bool` per case. Phase 9 will
 /// add `.agentConfig(AgentSnapshot)` etc. without touching the call site.
 enum SheetKind: Identifiable {
-    case newMemory
+    case newMemory(initialFolderID: UUID?)
     case editMemory(Memory)
-    case agentDetails(AgentSnapshot)
+
 
     var id: String {
         switch self {
         case .newMemory:                 return "new"
         case .editMemory(let memory):    return "edit-\(memory.id)"
-        case .agentDetails(let agent):   return "agent-\(agent.id)"
+
         }
     }
 }
 
+/// Shown once, after the folders migration has filed an existing vault. It
+/// reports what happened using the user's own folder names rather than
+/// describing a feature, and states plainly that access did not change —
+/// after an upgrade that visibly rearranged the vault, that is the reasonable
+/// fear to pre-empt. Suppressed entirely when migration created no folders,
+/// since then it has nothing to say.
+struct MigrationSummaryView: View {
+    let folders: [Folder]
+    let counts: [UUID: Int]
+    let inboxCount: Int
+    let onShowFolders: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your memories are now in folders")
+                    .font(.headline)
+                Text("Localmem 2.0")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("CREATED FROM YOUR IMPORTS")
+                        .font(.system(size: 9, weight: .medium))
+                        .kerning(0.8)
+                        .foregroundStyle(.tertiary)
+
+                    ForEach(folders) { folder in
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 12))
+                            Text(folder.name)
+                                .font(.system(size: 13))
+                            Spacer()
+                            Text("\(counts[folder.id] ?? 0)")
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Text("\(inboxCount) memories written by agents are in Inbox. New ones will be filed by project automatically.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("**Every agent can still read everything.** To keep a folder from some agents, open its settings and choose who can read it.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Done", action: onDismiss)
+                Button("Show me the folders", action: onShowFolders)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+        }
+        .frame(width: 420)
+    }
+}
+
+/// Mirrors what macOS does when you double-click a titlebar, honouring the
+/// user's "Double-click a window's title bar to" setting in System Settings.
+/// An unset preference means zoom, which is the system default.
+@MainActor
+func performTitlebarDoubleClickAction() {
+    guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+    switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+    case "Minimize":
+        window.miniaturize(nil)
+    case "None":
+        break
+    default:
+        window.zoom(nil)
+    }
+}
+
 struct ContentView: View {
+    static let inboxFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    /// Folders the migration created from imported documents — the only ones
+    /// the summary has anything to say about.
+    private func migratedSourceFolders(_ vm: MemoryStoreViewModel) -> [Folder] {
+        vm.folders
+            .filter { $0.kind == .source }
+            .sorted { (vm.folderCounts[$0.id] ?? 0) > (vm.folderCounts[$1.id] ?? 0) }
+    }
+
     // Screenshot/testing hook: `LOCALMEM_INITIAL_SECTION` (an AppSection raw
     // value) selects the section the window opens on. No effect when unset.
     @State private var section: AppSection = {
@@ -654,7 +830,9 @@ struct ContentView: View {
     @State private var query = ""
     @State private var sheet: SheetKind?
     @State private var memorySelection: Memory.ID?
+    @State private var selectedFolderID: UUID? = nil
     @State private var auditMemoryFilter: Memory.ID?
+    @AppStorage("seenMigrationWarning") private var seenMigrationWarning = false
 
     // try? swallows DB-open errors so the app launches into a degraded state
     // rather than crashing. Each VM is optional all the way down.
@@ -668,6 +846,8 @@ struct ContentView: View {
     @State private var sidebarCollapsed = false
     @FocusState private var searchFocused: Bool
     @AppStorage("seenWizard") private var seenWizard = false
+    @AppStorage("seenFolderMigrationSummary") private var seenFolderMigrationSummary = false
+    @State private var showMigrationSummary = false
     @State private var showSetupWizard = false
     @State private var wizardMode: SetupWizardMode = .firstRun
     @State private var portabilityAlert: PortabilityAlert?
@@ -697,13 +877,21 @@ struct ContentView: View {
                         onToggleSidebar: {
                             withAnimation(.snappy) { sidebarCollapsed.toggle() }
                         },
-                        onNewMemory: { sheet = .newMemory },
+                        onNewMemory: { sheet = .newMemory(initialFolderID: selectedFolderID) },
                         onLock: { statusVM?.setLocked(true) },
                         onExport: exportMemories,
                         onImport: importMemories,
                         searchFocused: $searchFocused
                     )
                     .frame(height: 52)
+                    .contentShape(Rectangle())
+                    // The window hides its titlebar and the content ignores the
+                    // top safe area, so this bar sits where the titlebar would
+                    // be and swallows the system's double-click. Restore the
+                    // standard behaviour by hand. A tap gesture on the
+                    // container only fires when no control consumed the click,
+                    // so the buttons and search field still work.
+                    .onTapGesture(count: 2) { performTitlebarDoubleClickAction() }
 
                     Divider()
 
@@ -714,8 +902,10 @@ struct ContentView: View {
                         connectorsVM: connectorsVM,
                         selectedComingSoon: selectedComingSoon,
                         memorySelection: $memorySelection,
+                        selectedFolderID: $selectedFolderID,
+                        isSearching: !query.trimmingCharacters(in: .whitespaces).isEmpty,
                         onEditMemory: { memory in sheet = .editMemory(memory) },
-                        onConfigureAgent: { agent in sheet = .agentDetails(agent) },
+
                         onReconfigureAgents: {
                             wizardMode = .reconfigure
                             showSetupWizard = true
@@ -780,6 +970,27 @@ struct ContentView: View {
             }
         }
         .task(id: query) { await memoryVM?.search(query) }
+        // An import finishing while a search is active would file the new
+        // memories behind a filter that hides them. Clear it and refresh.
+        .onChange(of: connectorsVM?.completedBatches ?? 0) { _, _ in
+            query = ""
+            Task {
+                await memoryVM?.search("")
+                await statusVM?.refresh()
+            }
+        }
+        .task {
+            // The summary needs folder counts, so it waits for the first load
+            // rather than firing in `.onAppear`. Nothing to report when the
+            // migration filed everything into Inbox, so stay silent there.
+            guard !seenFolderMigrationSummary, let memoryVM else { return }
+            await memoryVM.loadFoldersAndAgents()
+            if !migratedSourceFolders(memoryVM).isEmpty {
+                showMigrationSummary = true
+            } else {
+                seenFolderMigrationSummary = true
+            }
+        }
         .task {
             // Status + memory-list polling — auto-cancels on view disappear.
             // Memories are also written by the separate localmem-mcp process when
@@ -813,11 +1024,30 @@ struct ContentView: View {
                 Task { await statusVM?.refresh() }
             }
         }
+        .sheet(isPresented: $showMigrationSummary) {
+            if let memoryVM {
+                MigrationSummaryView(
+                    folders: migratedSourceFolders(memoryVM),
+                    counts: memoryVM.folderCounts,
+                    inboxCount: memoryVM.folderCounts[Self.inboxFolderID] ?? 0,
+                    onShowFolders: {
+                        seenFolderMigrationSummary = true
+                        showMigrationSummary = false
+                        selectedComingSoon = nil
+                        section = .memories
+                    },
+                    onDismiss: {
+                        seenFolderMigrationSummary = true
+                        showMigrationSummary = false
+                    }
+                )
+            }
+        }
         .sheet(item: $sheet) { kind in
             switch kind {
-            case .newMemory:
+            case .newMemory(let initialFolderID):
                 if let memoryVM {
-                    MemoryEditorView(mode: .new, vm: memoryVM) { newID in
+                    MemoryEditorView(mode: .new, initialFolderID: initialFolderID, vm: memoryVM) { newID in
                         memorySelection = newID
                         selectedComingSoon = nil
                         section = .memories
@@ -825,13 +1055,11 @@ struct ContentView: View {
                 }
             case .editMemory(let memory):
                 if let memoryVM {
-                    MemoryEditorView(mode: .edit(memory), vm: memoryVM) { updatedID in
+                    MemoryEditorView(mode: .edit(memory), initialFolderID: memory.folderID, vm: memoryVM) { updatedID in
                         memorySelection = updatedID
                         selectedComingSoon = nil
                     }
                 }
-            case .agentDetails(let agent):
-                AgentDetailsSheet(agent: agent)
             }
         }
         .alert(item: $portabilityAlert) { alert in
@@ -1217,8 +1445,10 @@ struct ContentArea: View {
     let connectorsVM: ConnectorsViewModel?
     let selectedComingSoon: ComingSoonFeature?
     @Binding var memorySelection: Memory.ID?
+    @Binding var selectedFolderID: UUID?
+    let isSearching: Bool
     let onEditMemory: (Memory) -> Void
-    let onConfigureAgent: (AgentSnapshot) -> Void
+
     let onReconfigureAgents: () -> Void
     let onShowAuditTrail: (Memory) -> Void
     let onOpenAuditMemory: (Memory.ID) -> Void
@@ -1243,17 +1473,20 @@ struct ContentArea: View {
                     MemoriesView(
                         vm: memoryVM,
                         selection: $memorySelection,
+                        selectedFolderID: $selectedFolderID,
+                        isSearching: isSearching,
                         onEdit: onEditMemory,
                         onShowAuditTrail: onShowAuditTrail
                     )
                 case .agents:
-                    AgentsView(
-                        statusVM: statusVM,
-                        onConfigure: onConfigureAgent,
-                        onReconfigureAgents: onReconfigureAgents
-                    )
-                case .access:
-                    AccessRulesView(statusVM: statusVM)
+                    if let memoryVM {
+                        AgentsView(
+                            vm: memoryVM,
+                            onReconfigureAgents: onReconfigureAgents
+                        )
+                    } else {
+                        Text("Memory store unavailable")
+                    }
                 case .audit:
                     AuditLogView(memoryFilter: $auditMemoryFilter, onOpenMemory: onOpenAuditMemory)
                 case .connectors:
@@ -1588,36 +1821,91 @@ struct ActivityRow: View {
 struct MemoriesView: View {
     let vm: MemoryStoreViewModel?
     @Binding var selection: Memory.ID?
+    @Binding var selectedFolderID: UUID?
+    let isSearching: Bool
     let onEdit: (Memory) -> Void
     let onShowAuditTrail: (Memory) -> Void
+
+    @AppStorage("lastSelectedFolderID") private var lastSelectedFolderID = ""
 
     private var selected: Memory? {
         guard let selection else { return nil }
         return vm?.loadedMemories[selection] ?? vm?.memories.first { $0.id == selection }
     }
 
+    /// `nil` folder means "All Memories" — the unfiltered vault.
+    private var visibleMemories: [Memory] {
+        let all = vm?.memories ?? []
+        guard let selectedFolderID else { return all }
+        return all.filter { $0.folderID == selectedFolderID }
+    }
+
+    private var selectedFolder: Folder? {
+        guard let selectedFolderID else { return nil }
+        return vm?.folders.first { $0.id == selectedFolderID }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            MemoryListPane(memories: vm?.memories ?? [], selection: $selection)
-                .frame(width: 320)
-                .background(.background.secondary)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(.separator).frame(width: 1)
+            FolderTreePane(
+                folders: vm?.folders ?? [],
+                memories: vm?.memories ?? [],
+                counts: vm?.folderCounts ?? [:],
+                isSearching: isSearching,
+                selection: $selection,
+                selectedFolderID: $selectedFolderID,
+                vm: vm,
+                onDelete: { memory in
+                    Task {
+                        try? await vm?.delete(memory.id)
+                        if selection == memory.id { selection = nil }
+                    }
                 }
+            )
+                .frame(width: 300)
+                .background(.background.secondary)
                 .overlay(alignment: .trailing) {
                     Rectangle().fill(.separator).frame(width: 1)
                 }
 
             Divider()
 
-            MemoryDetailPane(
-                memory: selected,
-                vm: vm,
-                onDeleted: { selection = nil },
-                onEdit: onEdit,
-                onShowAuditTrail: onShowAuditTrail
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The right pane is contextual: picking a folder shows its
+            // settings, picking a memory shows the memory. Selecting a folder
+            // clears the memory selection, so the two never compete.
+            if selection == nil, let folder = selectedFolder, let vm {
+                FolderSettingsPane(
+                    folder: folder,
+                    count: vm.folderCounts[folder.id] ?? 0,
+                    agents: vm.agents,
+                    vm: vm,
+                    onDeleted: { selectedFolderID = nil }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                MemoryDetailPane(
+                    memory: selected,
+                    vm: vm,
+                    onDeleted: { selection = nil },
+                    onEdit: onEdit,
+                    onShowAuditTrail: onShowAuditTrail
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            await vm?.loadFoldersAndAgents()
+            // Restore the folder from the last session, but only if it still
+            // exists — a deleted or merged folder must not strand the pane on
+            // an empty selection.
+            if selectedFolderID == nil,
+               let restored = UUID(uuidString: lastSelectedFolderID),
+               vm?.folders.contains(where: { $0.id == restored }) == true {
+                selectedFolderID = restored
+            }
+        }
+        .onChange(of: selectedFolderID) { _, newValue in
+            lastSelectedFolderID = newValue?.uuidString ?? ""
         }
         .task(id: selection) {
             if let selection {
@@ -1644,57 +1932,490 @@ struct MemoriesView: View {
     }
 }
 
-struct MemoryListPane: View {
+/// The Memories navigator: a Finder/VS Code style tree — folders at the top
+/// level, their memories nested beneath. Sensitivity is marked on the folder
+/// row itself, so a restricted folder reads at a glance without opening
+/// settings. Clicking a folder shows its settings; clicking a memory shows
+/// the memory.
+struct FolderTreePane: View {
+    let folders: [Folder]
     let memories: [Memory]
+    let counts: [UUID: Int]
+    let isSearching: Bool
     @Binding var selection: Memory.ID?
+    @Binding var selectedFolderID: UUID?
+    let vm: MemoryStoreViewModel?
+    let onDelete: (Memory) -> Void
+
+    @State private var expanded: Set<UUID> = []
+    @State private var hoveredRow: UUID?
+    @State private var folderPendingDelete: Folder?
+    @State private var memoryPendingDelete: Memory?
+    // Persisted as a comma-joined list; the companion flag distinguishes
+    // "never opened the app" from "deliberately collapsed everything".
+    @AppStorage("expandedFolderIDs") private var expandedFolderIDs = ""
+    @AppStorage("hasFolderExpansionState") private var hasFolderExpansionState = false
+    @State private var showNewFolder = false
+    @State private var newFolderName = ""
+    @State private var newFolderSensitive = false
+
+    private static let inboxID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    /// Inbox first, then the rest alphabetically — the default folder is where
+    /// unfiled memories land, so it earns the fixed position.
+    private var ordered: [Folder] {
+        let inbox = folders.filter { $0.id == Self.inboxID }
+        let rest = folders.filter { $0.id != Self.inboxID }.sorted { $0.name < $1.name }
+        return inbox + rest
+    }
+
+    /// While a search is active the tree mirrors the results, so counts and
+    /// children both reflect matches. Otherwise it lists the folder's real
+    /// contents, loaded on expand.
+    private func children(of folder: Folder) -> [Memory] {
+        if isSearching { return memories.filter { $0.folderID == folder.id } }
+        return vm?.folderChildren[folder.id] ?? []
+    }
+
+    private func displayCount(_ folder: Folder) -> Int {
+        isSearching
+            ? memories.filter { $0.folderID == folder.id }.count
+            : (counts[folder.id] ?? 0)
+    }
+
+    private var visibleFolders: [Folder] { ordered }
+
+    private func hasMatches(_ folder: Folder) -> Bool {
+        !isSearching || displayCount(folder) > 0
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Memories").font(.headline)
                 Spacer()
-                Text("\(memories.count) total")
-                    .font(.caption)
+                Text("\(memories.count)")
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                Button {
+                    newFolderName = ""
+                    newFolderSensitive = false
+                    showNewFolder = true
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("New folder")
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
             Divider()
 
-            if memories.isEmpty {
-                ContentUnavailableView(
-                    "No memories yet",
-                    systemImage: "tray",
-                    description: Text("Add one with **+ New Memory** above.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(memories, selection: $selection) { memory in
-                    MemoryListRow(memory: memory)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(visibleFolders) { folder in
+                        folderRow(folder)
+
+                        if (isSearching && hasMatches(folder)) || (!isSearching && expanded.contains(folder.id)) {
+                            let kids = children(of: folder)
+                            if kids.isEmpty {
+                                Text("Empty")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.leading, 38)
+                                    .padding(.vertical, 3)
+                            } else {
+                                ForEach(kids) { memory in
+                                    memoryRow(memory)
+                                }
+                            }
+                        }
+                    }
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 6)
             }
+        }
+        .onAppear {
+            if hasFolderExpansionState {
+                expanded = Set(
+                    expandedFolderIDs
+                        .split(separator: ",")
+                        .compactMap { UUID(uuidString: String($0)) }
+                )
+            } else if let selection,
+                      let owner = memories.first(where: { $0.id == selection })?.folderID {
+                expanded.insert(owner)
+            } else {
+                // Cold start with no history: open Inbox so the tree never
+                // appears fully collapsed and empty.
+                expanded.insert(Self.inboxID)
+            }
+            if let selectedFolderID { expanded.insert(selectedFolderID) }
+            for id in expanded {
+                Task { await vm?.loadChildren(of: id) }
+            }
+        }
+        .onChange(of: expanded) { _, newValue in
+            hasFolderExpansionState = true
+            expandedFolderIDs = newValue.map(\.uuidString).joined(separator: ",")
+        }
+        .onChange(of: selectedFolderID) { _, newValue in
+            // The folder selection is restored asynchronously after folders
+            // load, which can land after this view appeared — reveal it then.
+            guard let newValue else { return }
+            expanded.insert(newValue)
+            Task { await vm?.loadChildren(of: newValue) }
+        }
+        .confirmationDialog(
+            folderPendingDelete.map { "Delete “\($0.name)”?" } ?? "",
+            isPresented: Binding(get: { folderPendingDelete != nil },
+                                 set: { if !$0 { folderPendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let folder = folderPendingDelete {
+                    if selectedFolderID == folder.id { selectedFolderID = nil }
+                    Task { try? await vm?.deleteFolder(id: folder.id) }
+                }
+                folderPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { folderPendingDelete = nil }
+        } message: {
+            Text("Its memories move to Inbox. No memory is deleted.")
+        }
+        .confirmationDialog(
+            "Delete this memory?",
+            isPresented: Binding(get: { memoryPendingDelete != nil },
+                                 set: { if !$0 { memoryPendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let memory = memoryPendingDelete { onDelete(memory) }
+                memoryPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { memoryPendingDelete = nil }
+        } message: {
+            Text(memoryPendingDelete?.title ?? memoryPendingDelete?.headline ?? "")
+        }
+        .sheet(isPresented: $showNewFolder) {
+            NewFolderSheet(
+                name: $newFolderName,
+                sensitive: $newFolderSensitive,
+                onCancel: { showNewFolder = false },
+                onCreate: {
+                    let name = newFolderName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    Task {
+                        try? await vm?.createFolder(name: name, isSensitive: newFolderSensitive)
+                        showNewFolder = false
+                    }
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func folderRow(_ folder: Folder) -> some View {
+        let isSelected = selectedFolderID == folder.id && selection == nil
+        // A search opens the folders that matched — hiding hits behind a
+        // chevron defeats the search — but leaves the rest shut.
+        let isOpen = (isSearching && hasMatches(folder)) || (!isSearching && expanded.contains(folder.id))
+
+        HStack(spacing: 4) {
+            Button {
+                if isOpen {
+                    expanded.remove(folder.id)
+                } else {
+                    expanded.insert(folder.id)
+                    Task { await vm?.loadChildren(of: folder.id) }
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .frame(width: 12, height: 12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                selectedFolderID = folder.id
+                selection = nil
+                if !isOpen {
+                    expanded.insert(folder.id)
+                    Task { await vm?.loadChildren(of: folder.id) }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: folder.isSensitive ? "lock.fill" : "folder.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(isSelected ? Color.white : (folder.isSensitive ? Color.orange : Color.accentColor))
+                        .frame(width: 15)
+                    Text(folder.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    Spacer(minLength: 4)
+                    Text("\(displayCount(folder))")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
+                    if folder.kind != .default {
+                        RowDeleteButton(
+                            visible: hoveredRow == folder.id,
+                            help: "Delete folder"
+                        ) { folderPendingDelete = folder }
+                    } else {
+                        Color.clear.frame(width: 16)
+                    }
+                }
+                .contentShape(Rectangle())
+                .opacity(hasMatches(folder) ? 1 : 0.4)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? Color.accentColor : Color.clear)
+        )
+        .onHover { hoveredRow = $0 ? folder.id : (hoveredRow == folder.id ? nil : hoveredRow) }
+        .help(folder.isSensitive ? "\(folder.name) — sensitive" : folder.name)
+    }
+
+    @ViewBuilder
+    private func memoryRow(_ memory: Memory) -> some View {
+        let isSelected = selection == memory.id
+        Button {
+            selection = memory.id
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(memory.title ?? memory.headline ?? "Untitled")
+                        .font(.system(size: 12.5))
+                        .lineLimit(1)
+                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    if let headline = memory.headline, memory.title != nil, !headline.isEmpty {
+                        Text(headline)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.75) : Color.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                RowDeleteButton(
+                    visible: hoveredRow == memory.id,
+                    help: "Delete memory"
+                ) { memoryPendingDelete = memory }
+            }
+            .padding(.leading, 32)
+            .padding(.trailing, 8)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isSelected ? Color.accentColor : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredRow = $0 ? memory.id : (hoveredRow == memory.id ? nil : hoveredRow) }
+        .contextMenu {
+            Button("Delete", role: .destructive) { memoryPendingDelete = memory }
         }
     }
 }
 
-struct MemoryListRow: View {
-    let memory: Memory
+struct NewFolderSheet: View {
+    @Binding var name: String
+    @Binding var sensitive: Bool
+    let onCancel: () -> Void
+    let onCreate: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            SourceIcon(source: memory.source, size: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(memory.title ?? memory.headline ?? String(memory.content.prefix(40)))
-                    .lineLimit(1)
-                Text("\(memory.type.rawValue.capitalized) · \(memory.createdAt, format: .relative(presentation: .named))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("New folder")
+                .font(.headline)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+
+            VStack(alignment: .leading, spacing: 14) {
+                TextField("Name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+
+                Toggle(isOn: $sensitive) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sensitive")
+                        Text("Agents set to non-sensitive only cannot read this folder.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.checkbox)
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Create", action: onCreate)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
-        .padding(.vertical, 2)
+        .frame(width: 380)
+    }
+}
+
+/// Right pane when a folder is selected. Inbox's controls are disabled rather
+/// than hidden — a missing control reads as a bug — and the helper text says
+/// what to do instead, so the dead end has an exit.
+struct FolderSettingsPane: View {
+    let folder: Folder
+    let count: Int
+    let agents: [Agent]
+    let vm: MemoryStoreViewModel
+    let onDeleted: () -> Void
+
+    @State private var draftName: String = ""
+    @State private var showDeleteConfirm = false
+
+    private var isInbox: Bool { folder.kind == .default }
+
+    private var restrictedAgentNames: [String] {
+        KnownAgents.all
+            .filter { known in agents.first(where: { $0.id == known.id })?.status == .nonSensitiveOnly }
+            .map(\.displayName)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 10) {
+                    Image(systemName: folder.isSensitive ? "lock.fill" : "folder.fill")
+                        .font(.title2)
+                        .foregroundStyle(folder.isSensitive ? .orange : .accentColor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(folder.name).font(.title2.weight(.semibold))
+                        Text("\(count) memories").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if folder.isSensitive { Pill(text: "Sensitive", color: .orange) }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("NAME")
+                        .font(.system(size: 9, weight: .medium)).kerning(0.8)
+                        .foregroundStyle(.tertiary)
+                    if isInbox {
+                        HStack(spacing: 6) {
+                            Text(folder.name)
+                            Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(.secondary)
+                    } else {
+                        TextField("Name", text: $draftName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 320)
+                            .onSubmit { commitName() }
+                    }
+                }
+
+                if let root = folder.projectRoot {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("PROJECT")
+                            .font(.system(size: 9, weight: .medium)).kerning(0.8)
+                            .foregroundStyle(.tertiary)
+                        Text(root).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("WHO CAN READ THIS")
+                        .font(.system(size: 9, weight: .medium)).kerning(0.8)
+                        .foregroundStyle(.tertiary)
+
+                    Picker("", selection: Binding(
+                        get: { folder.isSensitive },
+                        set: { newVal in
+                            Task { try? await vm.updateFolder(id: folder.id, name: folder.name, isSensitive: newVal) }
+                        }
+                    )) {
+                        Text("All agents").tag(false)
+                        Text("Trusted only").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 320)
+                    .disabled(isInbox)
+
+                    if isInbox {
+                        Text("Inbox is always readable by every agent. To restrict these memories, move them to another folder.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if folder.isSensitive {
+                        let names = restrictedAgentNames
+                        Text(names.isEmpty
+                             ? "No agent is currently restricted, so this folder is still readable by all of them. Set an agent to non-sensitive only on the Agents page."
+                             : "Hidden from \(names.joined(separator: ", ")).")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Every agent can read this folder.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                if !isInbox {
+                    Divider()
+                    HStack {
+                        Button("Delete Folder...", role: .destructive) { showDeleteConfirm = true }
+                        Spacer()
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onAppear { draftName = folder.name }
+        .onChange(of: folder.id) { _, _ in draftName = folder.name }
+        .alert("Delete “\(folder.name)”?", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task {
+                    try? await vm.deleteFolder(id: folder.id)
+                    onDeleted()
+                }
+            }
+        } message: {
+            Text("Its \(count) memories move to Inbox. No memory is deleted.")
+        }
+    }
+
+    private func commitName() {
+        let trimmed = draftName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != folder.name else { return }
+        Task { try? await vm.updateFolder(id: folder.id, name: trimmed, isSensitive: folder.isSensitive) }
     }
 }
 
@@ -1716,7 +2437,7 @@ struct MemoryDetailPane: View {
                         Text(memory.title ?? "Untitled")
                             .font(.system(size: 28, weight: .bold))
 
-                        MetadataStrip(memory: memory)
+                        MetadataStrip(memory: memory, folder: vm?.folders.first { $0.id == memory.folderID })
 
                         if let supersededBy = memory.supersededBy, !supersededBy.isEmpty {
                             HStack(spacing: 10) {
@@ -1790,32 +2511,30 @@ struct MemoryDetailPane: View {
                                 .font(.footnote)
                                 .foregroundStyle(.red)
                         }
+
+                        // The actions flow with the content rather than
+                        // pinning to the pane's bottom edge: a two-line memory
+                        // in a tall window otherwise strands its buttons
+                        // hundreds of points below the thing they act on.
+                        Divider()
+                            .padding(.top, 4)
+
+                        HStack(spacing: 10) {
+                            Button("Edit") { onEdit(memory) }
+                                .disabled(vm?.loadedMemories[memory.id] == nil)
+                            Button("Delete", role: .destructive) {
+                                showingDeleteConfirmation = true
+                            }
+                            .tint(.red)
+                            Button("Audit trail") { onShowAuditTrail(memory) }
+                            Spacer()
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.horizontal, 32)
                     .padding(.vertical, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                AgentAccessSummary(memory: memory)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 14)
-
-                Divider()
-
-                // Actions pinned to the bottom of the pane.
-                HStack(spacing: 10) {
-                    Button("Edit") { onEdit(memory) }
-                        .disabled(vm?.loadedMemories[memory.id] == nil)
-                    Button("Delete", role: .destructive) {
-                        showingDeleteConfirmation = true
-                    }
-                    .tint(.red)
-                    Button("Audit trail") { onShowAuditTrail(memory) }
-                    Spacer()
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 14)
             }
             .confirmationDialog(
                 "Delete this memory?",
@@ -1856,9 +2575,19 @@ struct MemoryDetailPane: View {
 
 struct MetadataStrip: View {
     let memory: Memory
+    var folder: Folder?
 
     var body: some View {
         HStack(spacing: 8) {
+            if let folder {
+                Image(systemName: folder.isSensitive ? "lock.fill" : "folder.fill")
+                    .font(.caption)
+                    .foregroundStyle(folder.isSensitive ? .orange : .secondary)
+                Text(folder.name)
+                    .foregroundStyle(folder.isSensitive ? .orange : .secondary)
+                    .lineLimit(1)
+                Bullet()
+            }
             SourceIcon(source: memory.source, size: 14)
             Text(memory.source ?? "unknown")
             Bullet()
@@ -1875,51 +2604,6 @@ struct MetadataStrip: View {
     }
 }
 
-/// Read-only per-agent access list shown in the detail pane. Mirrors the
-/// editor's checkbox section but as a status display: each known agent is
-/// marked allowed or blocked based on the memory's exclusion denylist.
-struct AgentAccessSummary: View {
-    let memory: Memory
-
-    private var excluded: Set<String> { Set(memory.excludedAgents) }
-
-    private var headline: String {
-        let blocked = KnownAgents.all.filter { excluded.contains($0.id) }
-        if blocked.isEmpty { return "Agent access — all agents" }
-        return "Agent access — \(KnownAgents.all.count - blocked.count) of \(KnownAgents.all.count) agents"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(headline)
-                .font(.subheadline.weight(.semibold))
-
-            ForEach(KnownAgents.all, id: \.id) { agent in
-                let allowed = !excluded.contains(agent.id)
-                HStack(spacing: 8) {
-                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 18)
-                        .foregroundStyle(allowed ? (SourcePalette.color(for: agent.id) ?? .gray) : Color.gray.opacity(0.5))
-                        .opacity(allowed ? 1 : 0.5)
-                    Text(agent.displayName)
-                        .foregroundStyle(allowed ? .primary : .secondary)
-                    Text(agent.id)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Image(systemName: allowed ? "checkmark.circle.fill" : "slash.circle")
-                        .foregroundStyle(allowed ? Color.green : .secondary)
-                    Text(allowed ? "Allowed" : "No access")
-                        .font(.caption)
-                        .foregroundStyle(allowed ? Color.green : .secondary)
-                }
-                .font(.callout)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-    }
-}
 
 struct TagRow: View {
     let tags: [String]
@@ -2030,36 +2714,37 @@ struct MemoryEditorView: View {
     @State private var type: MemoryType
     @State private var content: String
     @State private var tagsInput: String
-    @State private var allowedAgentIDs: Set<String>
-    @State private var accessExpanded = false
+    @State private var folderID: UUID
     @State private var saveError: String?
 
-    /// Exclusions for agents the checkbox list can't render (an excluded
-    /// `agent_id` not in the `KnownAgents` catalog). The editor only toggles
-    /// catalog agents, so we carry these through untouched and re-merge them on
-    /// save — otherwise editing a memory would silently re-grant access.
-    private let preservedExclusions: [String]
-
-    init(mode: Mode, vm: MemoryStoreViewModel, onSaved: @escaping (Memory.ID) -> Void) {
+    init(mode: Mode, initialFolderID: UUID?, vm: MemoryStoreViewModel, onSaved: @escaping (Memory.ID) -> Void) {
         self.mode = mode
         self.vm = vm
         self.onSaved = onSaved
-        let catalogIDs = Set(KnownAgents.all.map(\.id))
+        
+        let folder: UUID
+        if let initial = initialFolderID {
+            folder = initial
+        } else if let inbox = vm.folders.first(where: { $0.name.lowercased() == "inbox" }) {
+            folder = inbox.id
+        } else {
+            folder = UUID()
+        }
+        
+        _folderID = State(initialValue: folder)
+        
         switch mode {
         case .new:
             _title = State(initialValue: "")
             _type = State(initialValue: .note)
             _content = State(initialValue: "")
             _tagsInput = State(initialValue: "")
-            _allowedAgentIDs = State(initialValue: catalogIDs)
-            preservedExclusions = []
         case .edit(let memory):
             _title = State(initialValue: memory.title ?? "")
             _type = State(initialValue: memory.type)
             _content = State(initialValue: memory.content)
             _tagsInput = State(initialValue: memory.tags.joined(separator: ", "))
-            _allowedAgentIDs = State(initialValue: catalogIDs.subtracting(memory.excludedAgents))
-            preservedExclusions = memory.excludedAgents.filter { !catalogIDs.contains($0) }
+            _folderID = State(initialValue: memory.folderID)
         }
     }
 
@@ -2112,6 +2797,20 @@ struct MemoryEditorView: View {
                             }
                             .padding(.leading, 5)
 
+                            HStack(spacing: 10) {
+                                Text("Folder").foregroundStyle(.secondary)
+                                Picker("", selection: $folderID) {
+                                    ForEach(vm.folders) { f in
+                                        Text(f.name).tag(f.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .fixedSize()
+                                Spacer()
+                            }
+                            .padding(.leading, 5)
+
                             TextField("Tags — optional, comma separated (help search find this later)", text: $tagsInput)
                                 .textFieldStyle(.roundedBorder)
 
@@ -2139,44 +2838,6 @@ struct MemoryEditorView: View {
                             }
                         }
                     }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Button {
-                            withAnimation(.snappy) { accessExpanded.toggle() }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text("Access Control — \(accessSummary)")
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Image(systemName: accessExpanded ? "chevron.down" : "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-
-                        if accessExpanded {
-                            Text("Unchecked agents can't see this memory over MCP. You, the CLI, and this app always can.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(KnownAgents.all, id: \.id) { agent in
-                                Toggle(isOn: accessBinding(for: agent.id)) {
-                                    HStack(spacing: 8) {
-                                        AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 16)
-                                            .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                                        Text(agent.displayName)
-                                        Text(agent.id)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(14)
-                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
@@ -2215,23 +2876,9 @@ struct MemoryEditorView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        // Fixed width, but height grows with content so expanding the
-        // "Agent access" section enlarges the sheet instead of clipping the
-        // buttons. The Spacer above keeps the buttons pinned to the bottom at
-        // the minimum height; past it, the sheet resizes to fit.
         .frame(width: 560)
         .frame(minHeight: 520)
         .frame(maxHeight: 720)
-    }
-
-    private var accessSummary: String {
-        if allowedAgentIDs.count == KnownAgents.all.count { return "All agents" }
-        return "\(allowedAgentIDs.count) of \(KnownAgents.all.count) agents"
-    }
-
-    private var excludedAgents: [String] {
-        let catalogExcluded = KnownAgents.all.map(\.id).filter { !allowedAgentIDs.contains($0) }
-        return catalogExcluded + preservedExclusions
     }
 
     private var cleanedTags: [String] {
@@ -2249,19 +2896,6 @@ struct MemoryEditorView: View {
             return "Memory details are required."
         }
         return nil
-    }
-
-    private func accessBinding(for agentID: String) -> Binding<Bool> {
-        Binding(
-            get: { allowedAgentIDs.contains(agentID) },
-            set: { isAllowed in
-                if isAllowed {
-                    allowedAgentIDs.insert(agentID)
-                } else {
-                    allowedAgentIDs.remove(agentID)
-                }
-            }
-        )
     }
 
     private func limited(_ value: String, to limit: Int) -> String {
@@ -2283,7 +2917,7 @@ struct MemoryEditorView: View {
                     type: type,
                     content: cleanedContent,
                     tags: cleanedTags,
-                    excludedAgents: excludedAgents
+                    folderID: folderID
                 )
                 onSaved(newID)
             case .edit(let memory):
@@ -2293,7 +2927,7 @@ struct MemoryEditorView: View {
                     type: type,
                     content: cleanedContent,
                     tags: cleanedTags,
-                    excludedAgents: excludedAgents
+                    folderID: folderID
                 )
                 onSaved(updated.id)
             }
@@ -2335,67 +2969,50 @@ struct CharacterCount: View {
     }
 }
 
-// MARK: - Agents page (Phase 9)
+// MARK: - Agents & Folders page (replaces old per-memory Access Roster)
 
 struct AgentsView: View {
-    let statusVM: VaultStatusViewModel?
-    let onConfigure: (AgentSnapshot) -> Void
+    let vm: MemoryStoreViewModel
     let onReconfigureAgents: () -> Void
     @State private var showingResetConfirmation = false
     @State private var resetInProgress = false
     @State private var resetMessage: String?
-
-    private var snapshots: [AgentSnapshot] {
-        let activity = statusVM?.recentActivity ?? []
-        let now = Date()
-        // "Connected" = saw any activity in the last 5 minutes. Better than
-        // a binary "ever seen" check for a status that we want to feel live.
-        let connectedWindow: TimeInterval = 300
-
-        return KnownAgents.all.map { entry in
-            let mine = activity.filter { $0.actorID == entry.id }
-            let last = mine.first?.occurredAt
-            let reads = mine.filter { ["memory_recent", "memory_search"].contains($0.operation) }.count
-            let writes = mine.filter { ["memory_store", "memory_update"].contains($0.operation) }.count
-            let connected = (last.map { now.timeIntervalSince($0) < connectedWindow }) ?? false
-            return AgentSnapshot(
-                id: entry.id,
-                displayName: entry.displayName,
-                symbol: entry.symbol,
-                isConnected: connected,
-                lastAccess: last,
-                reads: reads,
-                writes: writes
-            )
-        }
-    }
-
-    private let columns = [GridItem(.adaptive(minimum: 240), spacing: 16)]
+    @State private var showNewFolder = false
+    @State private var newFolderName = ""
+    @State private var newFolderSensitive = false
+    @State private var folderError: String?
+    @State private var folderToDelete: Folder?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 24) {
                 PageHeader(
                     title: "Agents",
-                    subtitle: "Every connected AI tool gets explicit memory permissions."
+                    subtitle: "Choose what each agent is allowed to read."
                 ) {
                     Button("Reconfigure...", action: onReconfigureAgents)
                         .buttonStyle(.borderedProminent)
                 }
 
-                if let resetMessage {
-                    Text(resetMessage)
-                        .font(.footnote)
+                // ───── Agent status section ─────
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("An agent set to **non-sensitive only** cannot read memories in folders marked sensitive. Mark a folder sensitive in **Memories**.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
-                }
 
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(snapshots) { agent in
-                        AgentCard(agent: agent, onConfigure: { onConfigure(agent) })
+                    ForEach(KnownAgents.all, id: \.id) { known in
+                        let dbAgent = vm.agents.first(where: { $0.id == known.id })
+                        let status = dbAgent?.status ?? .all
+                        AgentStatusRow(known: known, status: status, vm: vm)
                     }
                 }
 
-                Divider().padding(.top, 4)
+                Divider()
+
+                // ───── Reset section ─────
+                if let resetMessage {
+                    Text(resetMessage).font(.footnote).foregroundStyle(.secondary)
+                }
 
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -2413,6 +3030,7 @@ struct AgentsView: View {
             }
             .padding(24)
         }
+        .task { await vm.loadFoldersAndAgents() }
         .alert("Reset all agent configurations?", isPresented: $showingResetConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Reset and Reconfigure", role: .destructive) {
@@ -2431,362 +3049,151 @@ struct AgentsView: View {
         } message: {
             Text("This removes only Localmem's managed import lines and rewrites Localmem setup. Your other agent instructions stay in place.")
         }
-    }
-}
-
-struct AgentCard: View {
-    let agent: AgentSnapshot
-    let onConfigure: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill((SourcePalette.color(for: agent.id) ?? .gray).opacity(0.18))
-                        .frame(width: 36, height: 36)
-                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 20)
-                        .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.displayName).font(.headline)
-                    Text(agent.isConnected ? "Connected" : "Idle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-
-            let config = AgentConfigurationInspector.state(for: agent)
-            Pill(text: config.statusText, color: config.statusColor)
-
-            HStack(spacing: 18) {
-                Stat(label: "reads", value: "\(agent.reads)")
-                Stat(label: "writes", value: "\(agent.writes)")
-                Spacer(minLength: 0)
-                if let last = agent.lastAccess {
-                    Text(last, format: .relative(presentation: .numeric))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            HStack {
-                Button("Details", action: onConfigure)
-                    .buttonStyle(.bordered)
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private struct Stat: View {
-        let label: String
-        let value: String
-        var body: some View {
-            HStack(spacing: 4) {
-                Text(value).font(.subheadline.weight(.semibold)).monospacedDigit()
-                Text(label).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-struct AgentDetailsSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let agent: AgentSnapshot
-    @State private var state: AgentConfigurationState
-    @State private var runningAction: String?
-    @State private var message: String?
-    @State private var showingRemoveConfirmation = false
-
-    init(agent: AgentSnapshot) {
-        self.agent = agent
-        _state = State(initialValue: AgentConfigurationInspector.state(for: agent))
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("\(agent.displayName) details")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
-
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 10) {
-                    AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 18)
-                        .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                    Text(agent.id).font(.callout).foregroundStyle(.secondary)
+        .sheet(isPresented: $showNewFolder) {
+            VStack(spacing: 16) {
+                Text("New Folder").font(.headline)
+                TextField("Folder name", text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("Sensitive", isOn: $newFolderSensitive)
+                HStack {
+                    Button("Cancel") { showNewFolder = false }
                     Spacer()
-                    Pill(text: agent.isConnected ? "Connected" : "Idle",
-                         color: agent.isConnected ? .green : .gray)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    DetailRow(label: "Configuration", value: state.statusText)
-                    DetailRow(label: "MCP registration", value: state.isRegistered ? "Configured" : "Missing")
-                    DetailRow(label: "Binary", value: state.registeredBinaryPath ?? "Not registered")
-                    DetailRow(label: "Config file", value: state.configPath ?? "Not supported")
-                    DetailRow(label: "Instructions", value: state.instructionText)
-                    DetailRow(label: "Instruction file", value: state.instructionPath ?? "Not supported")
-                    DetailRow(label: "Last access", value: agent.lastAccess.map { $0.formatted(.relative(presentation: .numeric)) } ?? "No activity yet")
-                }
-
-                if let message {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 16)
-
-            Spacer(minLength: 0)
-
-            Divider()
-
-            HStack {
-                Button("Remove Connection", role: .destructive) {
-                    showingRemoveConfirmation = true
-                }
-                .disabled(runningAction != nil)
-                Button(runningAction == "repair" ? "Repairing..." : "Repair") {
-                    run("repair") {
-                        _ = try await AgentConfigurationInspector.repair(agentID: agent.id)
+                    Button("Create") {
+                        Task {
+                            do {
+                                try await vm.createFolder(name: newFolderName, isSensitive: newFolderSensitive)
+                                showNewFolder = false
+                            } catch {
+                                folderError = error.localizedDescription
+                            }
+                        }
                     }
-                }
-                .disabled(runningAction != nil)
-                Button(runningAction == "reconfigure" ? "Reconfiguring..." : "Reconfigure") {
-                    run("reconfigure") {
-                        _ = try await AgentConfigurationInspector.repair(agentID: agent.id)
-                    }
-                }
-                .disabled(runningAction != nil)
-                Spacer()
-                Button("Close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        }
-        .frame(width: 620, height: 480)
-        .alert("Remove \(agent.displayName) connection?", isPresented: $showingRemoveConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove Connection", role: .destructive) {
-                run("remove") {
-                    try await AgentConfigurationInspector.removeConnection(agentID: agent.id)
-                }
-            }
-        } message: {
-            Text("This removes Localmem's MCP entry and managed instruction import for this agent only.")
-        }
-    }
-
-    private func run(_ action: String, operation: @escaping () async throws -> Void) {
-        runningAction = action
-        message = nil
-        Task {
-            do {
-                try await operation()
-                state = AgentConfigurationInspector.state(for: agent)
-                message = "\(agent.displayName) \(action == "remove" ? "connection removed" : "configuration updated")."
-            } catch {
-                message = "\(action.capitalized) failed: \(error.localizedDescription)"
-            }
-            runningAction = nil
-        }
-    }
-
-    private struct DetailRow: View {
-        let label: String
-        let value: String
-
-        var body: some View {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 110, alignment: .leading)
-                Text(value)
-                    .font(.callout)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-            }
-        }
-    }
-}
-
-// MARK: - Access roster
-
-/// Agent-centric access management: for each known agent, what it's blocked
-/// from, with bulk grant/revoke and per-memory unblock. The inverse of the
-/// per-memory checkboxes in the editor.
-@Observable @MainActor
-final class AccessRosterViewModel {
-    struct AgentRow: Identifiable {
-        let agent: KnownAgent
-        var blocked: [Memory]
-        var id: String { agent.id }
-    }
-
-    private(set) var rows: [AgentRow] = []
-    private(set) var loadError: String?
-    private let store: MemoryStore
-
-    init() throws { self.store = try MemoryStore() }
-
-    func refresh() async {
-        do {
-            var result: [AgentRow] = []
-            for agent in KnownAgents.all {
-                let blocked = try await store.memoriesExcluding(agent: agent.id)
-                result.append(AgentRow(agent: agent, blocked: blocked))
-            }
-            rows = result
-            loadError = nil
-        } catch {
-            loadError = String(describing: error)
-        }
-    }
-
-    func unblock(_ memory: Memory, from agent: KnownAgent) async {
-        await run { _ = try await self.store.setExclusion(memoryID: memory.id, agent: agent.id, excluded: false, actorKind: .cli, actorID: "user") }
-    }
-
-    func allowAll(_ agent: KnownAgent) async {
-        await run { _ = try await self.store.grantAllAccess(toAgent: agent.id, actorKind: .cli, actorID: "user") }
-    }
-
-    func hideAll(_ agent: KnownAgent) async {
-        await run { _ = try await self.store.revokeAllAccess(fromAgent: agent.id, actorKind: .cli, actorID: "user") }
-    }
-
-    private func run(_ op: @escaping () async throws -> Void) async {
-        do { try await op(); await refresh() }
-        catch { loadError = String(describing: error) }
-    }
-}
-
-struct AccessRulesView: View {
-    let statusVM: VaultStatusViewModel?
-    @State private var vm: AccessRosterViewModel? = try? AccessRosterViewModel()
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                PageHeader(
-                    title: "Access Roster",
-                    subtitle: "Per-agent memory access. Block or unblock an agent across memories here; per-memory control lives in each memory's editor."
-                )
-
-                if let vm {
-                    if let loadError = vm.loadError {
-                        Text(loadError).font(.footnote).foregroundStyle(.red)
-                    }
-                    ForEach(vm.rows) { row in
-                        AgentAccessCard(row: row, connected: isConnected(row.agent.id), vm: vm)
-                    }
-                } else {
-                    Text("Couldn't open the memory store.").foregroundStyle(.secondary)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .padding(24)
+            .frame(width: 360)
         }
-        .task { await vm?.refresh() }
-    }
-
-    private func isConnected(_ id: String) -> Bool {
-        guard let last = (statusVM?.recentActivity ?? []).first(where: { $0.actorID == id })?.occurredAt
-        else { return false }
-        return Date().timeIntervalSince(last) < 300
+        .confirmationDialog(
+            "Delete folder \"\(folderToDelete?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { folderToDelete != nil },
+                set: { if !$0 { folderToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let folder = folderToDelete {
+                    Task {
+                        do {
+                            try await vm.deleteFolder(id: folder.id)
+                        } catch {
+                            folderError = error.localizedDescription
+                        }
+                        folderToDelete = nil
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { folderToDelete = nil }
+        } message: {
+            Text("Memories in this folder will be moved to Inbox.")
+        }
     }
 }
 
-struct AgentAccessCard: View {
-    let row: AccessRosterViewModel.AgentRow
-    let connected: Bool
-    let vm: AccessRosterViewModel
+struct FolderRow: View {
+    let folder: Folder
+    let count: Int
+    let vm: MemoryStoreViewModel
+    let onDelete: () -> Void
 
-    @State private var expanded = false
-    @State private var confirmingHideAll = false
+    @State private var editSensitive: Bool
 
-    private var agent: KnownAgent { row.agent }
-    private var blockedCount: Int { row.blocked.count }
+    init(folder: Folder, count: Int, vm: MemoryStoreViewModel, onDelete: @escaping () -> Void) {
+        self.folder = folder
+        self.count = count
+        self.vm = vm
+        self.onDelete = onDelete
+        _editSensitive = State(initialValue: folder.isSensitive)
+    }
+
+    private var isInbox: Bool { folder.name.lowercased() == "inbox" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                AgentIcon(agentID: agent.id, symbol: agent.symbol, size: 22)
-                    .foregroundStyle(SourcePalette.color(for: agent.id) ?? .gray)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.displayName).font(.callout.weight(.semibold))
-                    Text(agent.id).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if connected {
-                    Pill(text: "Connected", color: .green)
-                }
-                Pill(
-                    text: blockedCount == 0 ? "Full access" : "Blocked from \(blockedCount)",
-                    color: blockedCount == 0 ? .green : .orange
-                )
-            }
+        HStack(spacing: 12) {
+            Image(systemName: folder.isSensitive ? "lock.folder.fill" : "folder.fill")
+                .font(.title3)
+                .foregroundStyle(folder.isSensitive ? .orange : .accentColor)
+                .frame(width: 28)
 
-            HStack(spacing: 10) {
-                Button("Allow all") { Task { await vm.allowAll(agent) } }
-                    .disabled(blockedCount == 0)
-                Button("Hide all") { confirmingHideAll = true }
-                    .tint(.orange)
-                if blockedCount > 0 {
-                    Button(expanded ? "Hide list" : "Show \(blockedCount) blocked") {
-                        expanded.toggle()
-                    }
-                }
-                Spacer()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            if expanded && blockedCount > 0 {
-                Divider()
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(row.blocked) { memory in
-                        HStack(spacing: 8) {
-                            SourceIcon(source: memory.source, size: 14)
-                            Text(memory.title ?? String(memory.content.prefix(48)))
-                                .lineLimit(1)
-                            Spacer()
-                            Button("Allow") { Task { await vm.unblock(memory, from: agent) } }
-                                .buttonStyle(.borderless)
-                                .controlSize(.small)
-                        }
-                        .font(.callout)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(folder.name).font(.callout.weight(.medium))
+                HStack(spacing: 6) {
+                    Text("\(count) memories").font(.caption).foregroundStyle(.secondary)
+                    if folder.kind == .project, let root = folder.projectRoot {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(root).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                     }
                 }
             }
+            Spacer()
+
+            if folder.isSensitive {
+                Pill(text: "Sensitive", color: .orange)
+            }
+
+            if !isInbox {
+                Toggle("Sensitive", isOn: Binding(
+                    get: { folder.isSensitive },
+                    set: { newVal in
+                        Task { try? await vm.updateFolder(id: folder.id, name: folder.name, isSensitive: newVal) }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Delete folder")
+            }
         }
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator, lineWidth: 1))
-        .confirmationDialog(
-            "Hide every memory from \(agent.displayName)?",
-            isPresented: $confirmingHideAll,
-            titleVisibility: .visible
-        ) {
-            Button("Hide all", role: .destructive) { Task { await vm.hideAll(agent) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\(agent.displayName) won't see any current memory over MCP until you allow it again. New memories stay visible unless you exclude them.")
+        .padding(12)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+struct AgentStatusRow: View {
+    let known: KnownAgent
+    let status: Agent.Status
+    let vm: MemoryStoreViewModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AgentIcon(agentID: known.id, symbol: known.symbol, size: 20)
+                .foregroundStyle(SourcePalette.color(for: known.id) ?? .gray)
+            Text(known.displayName).font(.callout.weight(.medium))
+            Text(known.id).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Picker("", selection: Binding(
+                get: { status },
+                set: { newStatus in
+                    Task { try? await vm.setAgentStatus(id: known.id, status: newStatus) }
+                }
+            )) {
+                Text("All folders").tag(Agent.Status.all)
+                Text("Non-sensitive only").tag(Agent.Status.nonSensitiveOnly)
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
         }
+        .padding(10)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -2822,9 +3229,9 @@ final class AuditLogViewModel {
     func refresh() async {
         do {
             async let activityRows = store.recent(limit: 500)
-            async let memoryRows = memoryStore.recent(limit: 500)
+            let recentResult = try await memoryStore.recent(limit: 500)
             all = try await activityRows
-            memories = try await memoryRows
+            memories = recentResult.memories
             memoryLinks = try await store.memoryLinks(activityIDs: all.map(\.id))
             loadError = nil
         }
