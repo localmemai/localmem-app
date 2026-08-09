@@ -44,11 +44,16 @@ SHOTS=(
 
 capture_one() {
 	local name="$1" assignment="$2"
-	log "Capturing $name…"
+	# Braces are load-bearing: the ellipsis is multibyte, and bash reads its
+	# bytes as part of an unbraced variable name.
+	log "Capturing ${name}…"
 
 	env LOCALMEM_VAULT_DIR="$VAULT_DIR" LOCALMEM_APPEARANCE="$APPEARANCE" \
 		"$assignment" "$BIN/localmem-app" >/dev/null 2>&1 &
 	local app_pid=$!
+	# Drop it from the job table so killing it later doesn't print
+	# "Terminated: 15", which reads like a failure in the output.
+	disown "$app_pid" 2>/dev/null || true
 	sleep "$SETTLE"
 
 	local wid width height

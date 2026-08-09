@@ -1167,7 +1167,12 @@ struct ContentView: View {
             // defaults to true, so checking before the user has seen the
             // toggle would fire the request they were about to decline —
             // the first run is exactly when the promise matters most.
-            if seenWizard {
+            //
+            // Screenshot runs are excluded too: a capture should never make a
+            // network call, and an update dialog appearing mid-capture would
+            // land in a marketing screenshot.
+            let screenshotMode = env["LOCALMEM_INITIAL_SECTION"] != nil || env["LOCALMEM_SHOW_WIZARD"] == "1"
+            if seenWizard && !screenshotMode {
                 Task { await updateChecker.checkOnLaunchIfDue() }
             }
         }
