@@ -62,6 +62,19 @@ printf '\e[8;30;100t'
 clear
 EOF
 
+# One command, absolute paths, both flags. Typing this by hand is how the first
+# two attempts ended up talking to the real vault: a project .mcp.json does not
+# displace a user-scope server, and a mistyped `cd` leaves you in a directory
+# with no project config at all — in both cases the agent connects to the real
+# vault and simply reports finding nothing.
+cat >"$PROJECT_DIR/run-demo.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$PROJECT_DIR"
+exec claude --strict-mcp-config --mcp-config "$PROJECT_DIR/.mcp.json"
+EOF
+chmod +x "$PROJECT_DIR/run-demo.sh"
+
 log "Done."
 cat <<EOF
 
@@ -73,18 +86,19 @@ Project: $PROJECT_DIR
 
      cd $PROJECT_DIR && bash --rcfile .demo-rc
 
-2. Launch the agent against *only* this config:
+2. Launch the agent — use the launcher, not \`claude\` directly:
 
-     claude --strict-mcp-config --mcp-config .mcp.json
+     $PROJECT_DIR/run-demo.sh
 
-   Both flags matter. A project .mcp.json does not displace the localmem
-   server already registered at user scope, so plain \`claude\` connects to
-   your real vault and finds none of the demo memories.
-   --strict-mcp-config ignores every other MCP configuration, which gets
-   the right vault without editing the config you actually use.
+   It carries both required flags and absolute paths. A project .mcp.json
+   does not displace the localmem server already registered at user scope,
+   so plain \`claude\` connects to your real vault; --strict-mcp-config
+   ignores every other MCP configuration, without editing the config you
+   use daily.
 
    Confirm before capturing: ask about "Acme staging" — that memory exists
-   only in the demo vault. Empty results mean you are still on the real one.
+   only in the demo vault. Empty results mean you are on the real one, and
+   the agent will say so calmly rather than erroring.
 
 3. Give it a prompt that forces a recall, e.g.
 
