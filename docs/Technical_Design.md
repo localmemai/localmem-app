@@ -13,7 +13,7 @@
 5. [Security & privacy model](#5-security--privacy-model)
 6. [Search](#6-search)
 7. [MCP server & tools](#7-mcp-server--tools)
-8. [Per-memory agent access control](#8-per-memory-agent-access-control)
+8. [Folders and agent visibility](#8-folders-and-agent-visibility)
 9. [CLI](#9-cli)
 10. [File connector](#10-file-connector)
 11. [macOS app UI](#11-macos-app-ui)
@@ -70,7 +70,9 @@ permissions, access history, and export.
 ## 3. Technology stack
 
 - **Language:** Swift, Swift Package Manager (`swift-tools-version: 6.2`),
-  targeting macOS 26+.
+  deployment target macOS 14. Features that need newer frameworks
+  (FoundationModels / Apple Intelligence extraction) are gated at runtime and
+  degrade to a CLI-agent backend rather than raising the floor.
 - **Storage:** SQLite via [GRDB.swift](https://github.com/groue/GRDB.swift) —
   FTS5, migrations, observation.
 - **CLI:** `swift-argument-parser`.
@@ -96,7 +98,7 @@ public struct Memory: Codable, Identifiable, Sendable {
     public var tags: [String]
     public var source: MemorySource
     public var reviewState: ReviewState
-    public var excludedAgents: [String]   // see §8
+    public var folderID: UUID             // see §8; defaults to Inbox
     public let createdAt: Date
     public var updatedAt: Date
 }
@@ -124,6 +126,11 @@ CREATE TABLE memories (
     content BLOB NOT NULL,
     source TEXT NOT NULL,
     review_state TEXT NOT NULL,
+    -- Fixed sentinel = Inbox, so a stale binary that knows nothing about
+    -- folders still writes valid rows instead of violating NOT NULL.
+    folder_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'
+        REFERENCES folders(id) ON DELETE SET DEFAULT,
+    session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -135,12 +142,24 @@ CREATE TABLE memory_tags (
     FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
-CREATE TABLE memory_agent_exclusions (
-    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    agent_id  TEXT NOT NULL,
-    PRIMARY KEY (memory_id, agent_id)
+CREATE TABLE folders (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    kind         TEXT NOT NULL,   -- default | project | source | manual
+    project_root TEXT,            -- git root, for kind='project'
+    sensitive    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
 );
-CREATE INDEX idx_excl_agent ON memory_agent_exclusions(agent_id);
+CREATE UNIQUE INDEX idx_folders_root ON folders(project_root)
+    WHERE project_root IS NOT NULL;
+
+CREATE TABLE agents (
+    id         TEXT PRIMARY KEY,  -- canonical actor_id
+    status     TEXT NOT NULL DEFAULT 'all',  -- all | non_sensitive_only
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE VIRTUAL TABLE memories_fts USING fts5(
     title,
@@ -150,10 +169,10 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 );
 ```
 
-Tags and exclusions are written/replaced inside the same write transaction as
-the memory, and populated on read via batched attach helpers (`attachTags`,
-`attachExclusions`). `ON DELETE CASCADE` drops a memory's tag and exclusion rows
-with it.
+Tags are written/replaced inside the same write transaction as the memory and
+populated on read via a batched attach helper. `ON DELETE CASCADE` drops a
+memory's tag rows with it. Deleting a folder reassigns its memories to `Inbox`
+rather than deleting them.
 
 > **Migrations during development.** While Localmem is pre-release we do not add
 > new migrations — schema changes go **inside the existing `v1_initial` block**
@@ -243,8 +262,10 @@ and audit logging.
   deliberately excluded from the pre-authorized tool set so clients prompt on
   each call.
 
-MCP responses use an agent-facing DTO and **do not** encode `excludedAgents` —
-the denylist is admin metadata for the CLI/app, not for arbitrary MCP clients.
+MCP responses use an agent-facing DTO and **do not** encode folder identity or
+sensitivity — that is admin metadata for the CLI/app, not for arbitrary MCP
+clients. What a restricted agent does get is the `accessNote` (§8): the fact that
+results were withheld, without the shape of what was withheld.
 
 ### Setup & registration
 
@@ -261,83 +282,126 @@ Setup is **idempotent** ("whoever ran setup last wins") and registers its own
 sibling `localmem-mcp`. Supported clients: **Claude Code, Claude Desktop, Cursor,
 Codex, Antigravity.**
 
-## 8. Per-memory agent access control
+## 8. Folders and agent visibility
 
-Let the user decide, **per memory, which agents may see it**. Not every agent
-should be trusted with every personal fact. This is an **organizational
-boundary, not a security wall** (see Non-goals).
+Every memory belongs to **exactly one folder**. The folder decides which agents
+may read it. Everything defaults open, so the feature is invisible until a user
+marks a folder.
+
+This is an **organizational boundary, not a security wall** (see Non-goals).
+
+### The whole rule
+
+A folder is **sensitive** or **not sensitive** (default). An agent is **all**
+(default) or **non-sensitive only**. An agent set to non-sensitive only skips
+sensitive folders. Nothing else.
+
+Because visibility lives on the folder, a memory carries no visibility state of
+its own. Moving a memory between folders *is* how it is reclassified, and moving
+a selection is how you reclassify in bulk — so there is no per-memory override
+and no inherited-versus-explicit distinction to reconcile.
 
 ### Settled decisions
 
 | Decision | Choice |
 |---|---|
-| Granularity | Per **memory**, per **agent** (not tiers, not categories) |
-| Default | **Open** — every agent has access unless excluded |
-| Storage shape | **Denylist** — persist only the *exclusions*, never the grants |
+| Granularity | Per **folder**, per **agent status** (not per memory) |
+| Hierarchy | **Flat** — no nesting |
+| Membership | Every memory in exactly one folder; no unfiled state |
+| Default folder | `Inbox`, at a fixed sentinel UUID; permanently not sensitive, cannot be renamed or deleted |
+| Defaults | Folders not sensitive; agents `all`, including agents installed later |
 | Enforcement surface | **MCP only** — CLI and app are admin surfaces and bypass |
-| Edit points | At create and update, via checkboxes (all ticked by default) |
 | Identity | Self-declared `actor_id`; not hardened |
 
-**Why denylist, not allowlist.** "Default open" must keep its promise when a
-*new* agent appears after a memory was written. Storing the allowed set would
-freeze the roster as of write time and silently exclude any agent wired up later.
-Storing only exclusions means the empty set is "everyone, including future
-agents," and unticking a box records an exception. It is also strictly less data.
+**Why this replaced per-memory denylists.** The previous design stored one
+exclusion per memory per agent. That cost one decision per memory per agent — a
+cost that grows with the product's own success, which is why the feature went
+unused. Folders collapse it to one decision per folder, applying to memories that
+do not exist yet.
+
+**Why `Inbox` is immutable.** It guarantees a safe home always exists and that a
+user cannot accidentally hide their entire vault. Its controls are disabled in
+the UI rather than hidden — a missing control reads as a bug — with the reason
+stated and an exit ("move them to another folder").
+
+**Why new agents default to `all`.** The reverse produces a worse failure: a
+newly installed tool that silently retrieves nothing, with no visible cause.
+An unknown `actor_id` resolves to `all` without needing a registration step.
+
+### How memories reach a folder
+
+| Origin | Folder |
+|---|---|
+| Agent writing in a project | The project's folder, keyed on **git root path** (not repo name, or `~/work/acme/api` and `~/personal/api` collide). Created on first write. |
+| Agent with no project | `Inbox` |
+| Document import | A folder named after the source's **parent directory** — `sources` holds one row per file, so grouping per source would turn a 60-file import into 60 folders |
+| Manual entry (app/CLI) | User picks; defaults to `Inbox` |
+
+Auto-created folders are always **not sensitive**. Nothing prompts, blocks, or
+infers sensitivity from content.
 
 ### Non-goals
 
 - **Not a security boundary.** Agent identity is the self-declared `actor_id`
   (from `clientInfo` during MCP `initialize`, falling back to
   `LOCALMEM_CLIENT_ID`; see `MCPClientIdentity`). A misbehaving agent can claim
-  another's name. Hardening identity (per-client tokens at registration) is a
-  possible later, separate effort.
-- **No per-operation granularity.** Exclusion is binary — an excluded agent sees
-  the memory in neither read nor search. Read-only vs. read-write per memory is
-  not modeled.
+  another's name. The honest promise is *"restricted agents stay in their
+  lane"* — it stops a trusted but overbroad tool from surfacing memories, and is
+  not a defence against a malicious local process. Neither UI copy nor
+  documentation should imply otherwise. Hardening identity (a per-client secret
+  provisioned at setup and verified server-side) is a possible later, separate
+  effort; `localmem setup` already writes and merges keys into each client's MCP
+  config block, so the mechanism exists.
+- **Grouping does not scope retrieval by default.** It scopes retrieval only
+  where the user has explicitly marked a folder sensitive *and* explicitly
+  restricted an agent. Both are deliberate acts; either alone changes nothing.
+  Scoping by *project context* was considered and cut — it fragments the
+  cross-project recall that is the product's core thesis. Sensitivity is
+  orthogonal to project: an agent set to `all` retains complete cross-project
+  recall no matter how many folders exist.
+- **No per-operation granularity.** Visibility is binary — a hidden memory is
+  hidden in read and search alike.
 - **No multi-user / auth.** Localmem stays single-user and local.
 
 ### Agent roster
 
-The checkbox roster reuses the same agent universe that powers the connection-
-status UI:
-
-- **Universe:** the `KnownAgents` catalog — Claude Code, Claude Desktop, Cursor,
-  Codex, Antigravity. Each entry's `id` is the canonical `actor_id`.
-  `KnownAgents` should live in `LocalmemCore` so IDs stay canonical across CLI,
-  MCP, and app.
-- **Liveness:** derived from `ActivityStore` — an agent is "connected" when its
-  newest activity row is within a 300s window. Shown only as an affordance
-  ("● connected"); it does not affect editability.
-
-Agents that have acted but aren't in `KnownAgents` keep default-open access until
-the catalog (or an "observed unknown agents" UI) grows to cover them.
+The status list reuses the same agent universe that powers the connection-status
+UI: the `KnownAgents` catalog in `LocalmemCore` — Claude Code, Claude Desktop,
+Cursor, Codex, Antigravity — whose `id` is the canonical `actor_id`. Liveness
+comes from `ActivityStore` (newest activity row within a 300s window) and is an
+affordance only; it does not affect editability.
 
 ### Enforcement seam
 
-The read methods on `MemoryStore` — `search`, `recent`, `get`, `findIDs` — take
-an optional caller identity:
+The read methods on `MemoryStore` — `search`, `recent`, `get`, `get(ids:)`,
+`findIDs` — take an optional caller identity:
 
 ```swift
 func search(query: String, limit: Int = 20,
-            requestingAgent: String? = nil) async throws -> [Memory]
+            requestingAgent: String? = nil) async throws
+    -> (memories: [Memory], withheld: Int)
 ```
 
 - `requestingAgent == nil` → **no filtering** (CLI/app admin bypass).
-- `requestingAgent == "<id>"` → exclude any memory with a matching row in
-  `memory_agent_exclusions`, via a `NOT EXISTS` / anti-join in SQL (filtering in
-  the query, not in Swift).
+- `requestingAgent == "<id>"` → resolve the agent's status, then join `folders`
+  and keep rows where `folders.sensitive = 0 OR status = 'all'` — filtering in
+  the query, not in Swift.
 
 | Caller | `requestingAgent` |
 |---|---|
-| MCP `memory_search` / `memory_recent` / `memory_update` readback | `await identity.name` |
+| MCP `memory_search` / `memory_recent` / `memory_get` / `memory_update` readback | `await identity.name` |
 | CLI commands | `nil` (bypass) |
 | App view models | `nil` (bypass) |
 
 `memory_update` reads the existing memory through the **filtered** path before
-writing, so an excluded agent cannot edit what it cannot see;
-`get(id:requestingAgent:)` returns `nil` for an excluded agent so update-by-id
-can't peek around the filter. After writing, the store returns the updated row
-from inside the write transaction without re-applying the read filter.
+writing, so a restricted agent cannot edit what it cannot see, and
+`get(id:requestingAgent:)` returns `nil` so update-by-id can't peek around the
+filter.
+
+A restricted agent is still **told** that results were held back: the result
+envelope carries an `accessNote`, and an `access_filtered` activity row records
+the count. Silently returning less would teach the agent the fact does not exist
+rather than that it cannot see it.
 
 ## 9. CLI
 
@@ -361,8 +425,8 @@ The `localmem` command is the pro-user and debugging surface. It shares
 
 Import memories from files the user deliberately picks — implemented; this
 section is the source of truth (it absorbed `File_Connector_Design.md` and,
-once implemented, `Extraction_Quality_Design.md`). The planned Obsidian
-connector lives in [Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
+once implemented, `Extraction_Quality_Design.md`). Additional input connectors
+(Obsidian, Apple Notes) were cut — see §13 Out of scope.
 
 ### Model
 
@@ -509,21 +573,46 @@ clients are configured). Modal, dismissible only by Quit or Finish. Five steps
    turns green on a successful `memory_store`. Retry/Skip if no connection in 5s.
 5. **You're set** — summary of location, clients, test result.
 
-### Sidebar (240pt)
+### Memories navigator (300pt)
 
-Search field (Cmd-F, live FTS), horizontally scrollable tag chips (`[all ▾]`
-multi-select placeholder), and a tight memory list — title + source dot (§ below)
-+ optional type line, no preview text. Untitled memories fall back to the first
-~40 chars of content, italicized. Right-click: Open / Edit / Duplicate / Copy ID
-/ Delete. ⌘-click multi-select for bulk delete.
+A Finder/VS Code style **tree**: folders at the top level, their memories nested
+beneath, with a disclosure chevron that toggles independently of selection (so a
+folder can be opened without navigating away from what is being read). `Inbox`
+sorts first; the rest alphabetically.
+
+Sensitivity is marked on the folder row itself — an orange lock rather than a
+folder glyph — so a restricted folder reads at a glance without opening
+settings. Every row carries a hover-revealed delete button whose space is
+reserved, so rows do not reflow as the pointer crosses them.
+
+Folder children are loaded **per folder on expand**, not filtered out of the
+search/recent window — a folder outside that window would otherwise show a
+correct count above an empty body. Selection and expansion persist across
+launches, skipping folders that no longer exist.
+
+While a search is active the tree mirrors the results: counts become match
+counts and matching folders auto-expand, but every folder stays listed (dimmed
+when it has no matches). Hiding rows outright makes a working filter look like
+data loss. A completed import clears the search, since it would otherwise file
+new memories behind a filter that hides them.
 
 ### Detail pane
 
 Selected memory: inline-editable title (double-click); metadata strip
 (`● Source · type · created · updated`, hover for absolute times); wrapping
 content (click-to-focus, saves on blur or ⌘S); tag chips (`+` to add, Backspace
-removes last); action bar (`Edit`, `Delete` with confirm, `Audit trail`, and
-`Access…`). Empty state prompts ⌘N.
+removes last); action bar (`Edit`, `Delete` with confirm, `Audit trail`). The
+metadata strip leads with the memory's folder, orange when sensitive.
+
+The action bar **flows with the content** rather than pinning to the pane's
+bottom edge — a two-line memory in a tall window otherwise strands its buttons
+far below the thing they act on. Empty state prompts ⌘N.
+
+Selecting a folder instead of a memory shows **folder settings** in the same
+pane: name, project path, and a "Who can read this" control. `Inbox`'s controls
+are disabled rather than hidden, with the reason stated. Marking a folder
+sensitive while no agent is restricted says so, rather than implying protection
+that is not in effect.
 
 **Audit trail** slides in a 320pt right inspector, grouping `ActivityStore` rows
 for the memory by day, with **Export CSV** and a confirm-gated **Clear log**
@@ -532,11 +621,10 @@ for the memory by day, with **Export CSV** and a confirm-gated **Clear log**
 ### Add / edit memory sheet
 
 Modal (~560×480). Fields: Title, Type (dropdown), Content (Save disabled until
-non-empty), Tags. **Agent access** disclosure row — "All agents" by default,
-expands to a checklist of `KnownAgents` (all ticked; unticking persists an
-exclusion; "● connected" dot shows liveness). Copy: *"Unchecked agents can't see
-this memory over MCP. You (CLI and this app) always can."* Source is hard-coded
-to `.user` for GUI writes. Esc cancels, ⌘S saves.
+non-empty), Tags, and **Folder** (defaults to the selected folder, else `Inbox`).
+Visibility is not set here — it belongs to the folder, so moving a memory between
+folders is how it is reclassified. Source is hard-coded to `.user` for GUI
+writes. Esc cancels, ⌘S saves.
 
 ### Source color coding
 
@@ -569,14 +657,13 @@ feedback).
 
 ### Reconciliation note
 
-An earlier **UI-only** access prototype (`MemoryCategory`,
-`AccessLevel = noAccess/askFirst/readOnly/readWrite`, an `AccessRulesView`
-category×agent matrix) modeled category-level, 4-state rules and is **not
-compatible** with the per-memory binary denylist (§8). Resolution: adopt the
-denylist as the real model, retire `MemoryCategory`/`AccessLevel`, and repurpose
-the Access Rules page as a **roster view** rather than a rules editor. Keep the
-`AgentSnapshot` / `KnownAgents` / connection-status plumbing — it's reused for the
-checkbox roster.
+Two earlier access models were tried and retired. A **UI-only** prototype
+(`MemoryCategory`, `AccessLevel = noAccess/askFirst/readOnly/readWrite`, a
+category×agent matrix) modeled 4-state rules; the shipped v1 replaced it with a
+per-memory binary denylist. Both were superseded by folders (§8) for the same
+reason: their configuration cost scaled with the number of memories, so neither
+survived a growing vault. `AgentSnapshot` / `KnownAgents` / connection-status
+plumbing is kept — it backs the agent status list.
 
 ## 12. Distribution & packaging
 
@@ -674,14 +761,14 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 ## 13. Roadmap
 
 - **v1.0 (shipped)** — macOS vault app (SwiftUI), local storage, MCP adapter,
-  per-memory access control, file connector (§10), signed + notarized DMG via
-  the tag-triggered release pipeline (§12).
-- **v1.1** — extraction quality: two-pass extract → verify + eval harness
-  (§10) — **implemented**; remaining: on-device guided generation +
-  chunking, vault-level dedup. Obsidian connector
-  ([design](Obsidian_Connector_Design.md)).
-- **v1.2** — Homebrew channel, Sparkle updates; improved tagging and
-  organization.
+  file connector (§10), signed + notarized DMG via the tag-triggered release
+  pipeline (§12).
+- **v2.0 (shipped)** — split retrieval (compact index + `memory_get`, BM25
+  ranking); append-only supersession edges; two-pass extract → verify on the
+  write path (§10); folders with per-folder agent visibility (§8); graceful
+  degradation on older macOS.
+- **next** — vault-level dedup; folder merge/rename ergonomics as auto-created
+  project folders accumulate; Homebrew channel and Sparkle updates.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
@@ -690,21 +777,21 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 
 Windows/Linux; Mac App Store (sandbox-incompatible); enterprise MDM; multi-user /
 auth; hardened agent identity; semantic / vector retrieval; memory version
-history beyond the audit log.
+history beyond the audit log. Also cut: routing retrieval by working directory
+(fragments cross-project recall — see §8 Non-goals); additional input surfaces
+(Obsidian/Apple Notes connectors, global hotkeys, share sheets) — input is not
+the constraint, retrieval is.
 
 ## 14. Open questions
 
 1. **Search-index confidentiality** — encrypted FTS index, in-memory rebuild on
    unlock, or documented-tradeoff plaintext index?
-2. **Filtered-result signaling** — should `memory_search` / `memory_recent`
-   signal that results were hidden by access rules ("3 memories hidden"), or stay
-   silent? (Silent is simpler and matches "organizational boundary.")
-3. **Daemon ownership** — should the GUI manage `localmem-mcp` via a LaunchAgent
+2. **Daemon ownership** — should the GUI manage `localmem-mcp` via a LaunchAgent
    (so "quit the app, daemon stops"), or assume the wizard configured it?
-4. **Source-string normalization** — a canonical `KnownClient` enum in
+3. **Source-string normalization** — a canonical `KnownClient` enum in
    `LocalmemCore` so CLI, MCP, and GUI agree on source strings.
-5. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
+4. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
    forever)?
-6. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
+5. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
    DMG vs. ZIP; Homebrew cask yes/no; commit to Sparkle for v1 or ship
    re-download-only; where release artifacts live (GitHub Releases vs. own CDN).

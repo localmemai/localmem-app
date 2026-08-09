@@ -265,7 +265,7 @@
         <div class="lm-card" style="padding:26px 24px;border-radius:16px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07)">
           <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:rgba(77,141,255,0.1);border:1px solid rgba(77,141,255,0.2);font-size:20px;margin-bottom:16px">🔒</div>
           <div style="font-weight:700;font-size:17px;margin-bottom:8px">100% local &amp; private</div>
-          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Memories live in plain files on your Mac. Nothing ever leaves the device — no cloud, no accounts.</div>
+          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Memories live in a SQLite database on your Mac. Nothing ever leaves the device — no cloud, no accounts.</div>
         </div>
 
         <div class="lm-card" style="padding:26px 24px;border-radius:16px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07)">
@@ -282,8 +282,8 @@
 
         <div class="lm-card" style="padding:26px 24px;border-radius:16px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07)">
           <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:rgba(77,141,255,0.1);border:1px solid rgba(77,141,255,0.2);font-size:20px;margin-bottom:16px">🛡️</div>
-          <div style="font-weight:700;font-size:17px;margin-bottom:8px">Per-memory access control</div>
-          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Grant or revoke what each agent can read and write, memory by memory.</div>
+          <div style="font-weight:700;font-size:17px;margin-bottom:8px">Folders you never have to file</div>
+          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Every memory lands in a folder automatically — by the project an agent was working in, or the document it came from. Mark one sensitive and the agents you choose stop seeing it.</div>
         </div>
 
         <div class="lm-card" style="padding:26px 24px;border-radius:16px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07)">
@@ -327,8 +327,8 @@
       <div class="lm-track" id="lm-track">
 
         <!-- Slide 1: Vault -->
-        <div class="lm-slide" data-cap="Browse every memory in one calm vault — content, tags, and who can see it.">
-          <div class="lm-shot"><img src="screenshots/vault.png" width="1512" height="890" loading="lazy" alt="Localmem vault showing a memory with its content, tags, and per-agent access." /></div>
+        <div class="lm-slide" data-cap="Browse every memory in one calm vault — filed into folders, with content and tags.">
+          <div class="lm-shot"><img src="screenshots/vault.png" width="1512" height="890" loading="lazy" alt="Localmem vault showing memories organised into folders, with content and tags." /></div>
         </div>
 
         <!-- Slide 2: File import / connectors -->
@@ -337,13 +337,13 @@
         </div>
 
         <!-- Slide 3: Agents -->
-        <div class="lm-slide" data-cap="Every connected AI tool gets its own memory permissions.">
+        <div class="lm-slide" data-cap="Mark a folder sensitive and choose which agents can read it.">
           <div class="lm-shot"><img src="screenshots/agents.png" width="1512" height="890" loading="lazy" alt="Localmem Agents screen listing Claude Code, Claude Desktop, Cursor, Codex and Antigravity with reads and writes." /></div>
         </div>
 
-        <!-- Slide 4: Access roster -->
-        <div class="lm-slide" data-cap="Grant, scope, or block each agent across your whole vault.">
-          <div class="lm-shot"><img src="screenshots/access.png" width="1512" height="890" loading="lazy" alt="Localmem Access Roster listing every connected agent with per-agent vault access controls." /></div>
+        <!-- Slide 4: Agent visibility -->
+        <div class="lm-slide" data-cap="Each connected agent reads everything, or skips your sensitive folders.">
+          <div class="lm-shot"><img src="screenshots/access.png" width="1512" height="890" loading="lazy" alt="Localmem listing every connected agent and whether it can read sensitive folders." /></div>
         </div>
 
         <!-- Slide 5: Activity / audit log -->
@@ -386,7 +386,7 @@
         <div style="padding:30px 26px;border-radius:16px;background:rgba(14,16,23,0.6);border:1px solid rgba(255,255,255,0.07)">
           <div style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:600;color:#07080c;width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#4d8dff,#35d0e0 55%,#a07dff);margin-bottom:18px">3</div>
           <div style="font-weight:700;font-size:18px;margin-bottom:9px">You stay in control</div>
-          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Browse, edit, and revoke memories anytime from the app. Your data, your rules.</div>
+          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Browse, edit, and delete memories anytime from the app, and decide which folders each agent may read. Your data, your rules.</div>
         </div>
 
       </div>
@@ -445,11 +445,11 @@
 
         <div class="lm-card" style="padding:26px 24px;border-radius:16px;background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-            <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:rgba(77,141,255,0.1);border:1px solid rgba(77,141,255,0.2);font-size:20px">📓</div>
+            <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:rgba(77,141,255,0.1);border:1px solid rgba(77,141,255,0.2);font-size:20px">🎯</div>
             <span style="padding:4px 10px;border-radius:999px;background:rgba(53,208,224,0.12);border:1px solid rgba(53,208,224,0.3);font-size:11px;font-weight:600;color:#35d0e0;font-family:'JetBrains Mono',monospace">Soon</span>
           </div>
-          <div style="font-weight:700;font-size:17px;margin-bottom:8px">Obsidian &amp; notes import</div>
-          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Localmem detects your Obsidian vaults and lets you pick exactly the notes worth remembering — Apple Notes and Notion to follow.</div>
+          <div style="font-weight:700;font-size:17px;margin-bottom:8px">Sharper recall</div>
+          <div style="font-size:14.5px;line-height:1.6;color:#9096a6">Better ranking and vault-wide de-duplication, so a growing store keeps returning the few memories that actually answer the question.</div>
         </div>
 
       </div>
@@ -466,7 +466,7 @@
           </div>
           <p style="color:#9096a6;font-size:17px;max-width:480px;margin:0 auto 30px">The native macOS app — download, drag to Applications, and connect your agents in one step.</p>
           <a href="https://github.com/localmemai/localmem-app/releases/latest/download/Localmem.dmg" style="display:inline-flex;align-items:center;gap:9px;padding:14px 28px;border-radius:13px;background:linear-gradient(135deg,#4d8dff,#35d0e0 55%,#a07dff);color:#fff;font-weight:600;font-size:15.5px;border:none;font-family:inherit;text-decoration:none">Download for macOS</a>
-          <p style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#6b7185;margin-top:24px">macOS 26+ · Apple Silicon &amp; Intel · signed &amp; notarized</p>
+          <p style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#6b7185;margin-top:24px">macOS 14+ · Apple Silicon &amp; Intel · signed &amp; notarized</p>
         </div>
       </div>
     </section>

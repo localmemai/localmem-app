@@ -50,8 +50,12 @@ search, permissions, and audit behavior:
 - **Cross-project by design.** One memory store, shared across every repo and
   every agent session.
 - **Full-text search** over every memory via SQLite FTS5.
-- **Per-agent access control.** Grant or revoke each connected agent's access to
-  individual memories.
+- **Folders.** Every memory lives in one folder, filed automatically by where it
+  came from — the project an agent was working in, or the directory a document
+  was imported from.
+- **Per-folder agent visibility.** Mark a folder sensitive and set an agent to
+  "non-sensitive only"; it then skips that folder. Everything defaults open, so
+  the feature stays out of your way until you want it.
 - **Audit log.** Every read, search, and write is attributed to the agent that
   made it and recorded so you can see what was accessed.
 - **Import from your files.** Pick Text, Markdown, or PDF files and Localmem
@@ -87,7 +91,9 @@ Setup auto-detects and registers Localmem with:
 
 ## Getting started
 
-Localmem is macOS-only (macOS 26+, Apple Silicon & Intel).
+Localmem is macOS-only (macOS 14+, Apple Silicon & Intel). On-device extraction
+via Apple Intelligence needs macOS 26; on older systems Localmem falls back to a
+CLI coding agent you already have.
 
 **Download:** grab the signed, notarized DMG from the [releases page][releases]
 (or [localmem.ai][site]), drag Localmem to Applications, and launch. The setup
@@ -132,12 +138,13 @@ Run `localmem --help` for the full command set.
 ## Architecture
 
 Localmem is a single Swift package. `LocalmemCore` owns memory CRUD, search,
-per-agent permissions, and audit logging; the app, CLI, and MCP server are thin
+folders and agent visibility, and audit logging; the app, CLI, and MCP server are thin
 surfaces over it. Storage is SQLite via [GRDB][grdb] with an FTS5 index for
 search. The MCP server is built on the official [Swift MCP SDK][swift-sdk].
 
-The full architecture, data model, security model, access control, app UI, and
-distribution plan live in the [technical design](docs/Technical_Design.md).
+The full architecture, data model, security model, folder and visibility model,
+app UI, and distribution plan live in the
+[technical design](docs/Technical_Design.md).
 
 ## Contributing
 
