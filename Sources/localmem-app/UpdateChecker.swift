@@ -3,65 +3,9 @@ import SwiftUI
 import AppKit
 import LocalmemCore
 
-/// Release info parsed from GitHub Releases API (§12 of Technical Design).
-public struct GitHubReleaseInfo: Codable, Equatable, Sendable, Identifiable {
-    public var id: Int
-    public var tagName: String
-    public var name: String?
-    public var body: String?
-    public var htmlUrl: String
-    public var draft: Bool
-    public var prerelease: Bool
-    public var publishedAt: String?
-    public var assets: [GitHubAsset]?
-
-    public struct GitHubAsset: Codable, Equatable, Sendable {
-        public var name: String
-        public var browserDownloadUrl: String
-
-        enum CodingKeys: String, CodingKey {
-            case name
-            case browserDownloadUrl = "browser_download_url"
-        }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case tagName = "tag_name"
-        case name
-        case body
-        case htmlUrl = "html_url"
-        case draft
-        case prerelease
-        case publishedAt = "published_at"
-        case assets
-    }
-
-    /// Clean semver string without leading 'v'
-    public var cleanVersion: String {
-        var str = tagName
-        if str.lowercased().hasPrefix("v") {
-            str = String(str.dropFirst())
-        }
-        return str
-    }
-
-    /// Finds the DMG asset download URL if present.
-    public var dmgDownloadUrl: String? {
-        assets?.first { $0.name.lowercased().hasSuffix(".dmg") }?.browserDownloadUrl
-    }
-
-    /// True when the notes carry the `## Security` heading (or an explicit
-    /// `[security]` marker) that the release checklist requires for a
-    /// security-relevant release. Nothing in the GitHub API reports this, so it
-    /// is a convention — see §12. Deliberately *not* a bare "security fix"
-    /// substring match: "contains no security fixes" would trip it.
-    public var flagsSecurityFix: Bool {
-        guard let body else { return false }
-        return body.localizedCaseInsensitiveContains("## security")
-            || body.localizedCaseInsensitiveContains("[security]")
-    }
-}
+// `GitHubReleaseInfo`, `UpdateDecision`, and `DiskImageMount` live in
+// LocalmemCore — the app target has no tests, and those are the parts with
+// decisions worth verifying. See `Sources/LocalmemCore/UpdateRelease.swift`.
 
 /// Runs a short-lived subprocess off the main actor and returns its exit status
 /// and stdout. `UpdateChecker` is `@MainActor`, and `waitUntilExit()` blocks the
@@ -124,7 +68,7 @@ public final class UpdateChecker {
     public enum Status: Equatable, Sendable {
         case idle
         case checking
-        case upToDate(lastChecked: Date)
+        case upToDate
         case updateAvailable(release: GitHubReleaseInfo, isSecurityFix: Bool)
         case failed(message: String)
     }
@@ -219,33 +163,17 @@ public final class UpdateChecker {
             }
 
             let releases = try JSONDecoder().decode([GitHubReleaseInfo].self, from: data)
+            let outcome = UpdateDecision.evaluate(releases: releases, currentVersion: currentVersion)
 
-            // Filter non-draft and non-prerelease
-            let stableReleases = releases.filter { !$0.draft && !$0.prerelease }
-
-            // Find newer releases
-            let newerReleases = stableReleases.filter { release in
-                SemVerComparer.compare(release.cleanVersion, currentVersion) == .orderedDescending
-            }
-
-            // Highest version, not first-listed: GitHub orders by creation date,
-            // so a 1.0.2 backport published after 1.1.0 would otherwise win.
-            let latest = newerReleases.max { a, b in
-                SemVerComparer.compare(a.cleanVersion, b.cleanVersion) == .orderedAscending
-            }
-
-            if let latest {
-                // Scan every intervening release, not just the newest: a fix
-                // shipped in 1.1.0 still matters to someone going 1.0.1 → 1.3.0.
-                let hasSecurity = newerReleases.contains(where: \.flagsSecurityFix)
-                status = .updateAvailable(release: latest, isSecurityFix: hasSecurity)
+            if let latest = outcome.latest {
+                status = .updateAvailable(release: latest, isSecurityFix: outcome.hasSecurityFix)
                 if userInitiated {
-                    pendingUpdate = PendingUpdate(release: latest, isSecurityFix: hasSecurity)
+                    pendingUpdate = PendingUpdate(release: latest, isSecurityFix: outcome.hasSecurityFix)
                 }
             } else {
-                status = .upToDate(lastChecked: Date())
+                status = .upToDate
                 if userInitiated {
-                    userInitiatedMessage = "Localmem \(currentVersion) is up to date."
+                    userInitiatedMessage = "Localmem \(currentVersion) is the latest version."
                 }
             }
         } catch {
@@ -306,7 +234,7 @@ public final class UpdateChecker {
             // Mount it. No -nobrowse: the whole point is that the user drags
             // out of the volume window, so it has to be visible in Finder.
             let mount = await runTool("/usr/bin/hdiutil", ["attach", destination.path, "-plist"])
-            guard mount.status == 0, let mountPoint = Self.mountPoint(fromPlist: mount.output) else {
+            guard mount.status == 0, let mountPoint = DiskImageMount.mountPoint(fromPlist: mount.output) else {
                 try? FileManager.default.removeItem(at: destination)
                 downloadedImagePath = nil
                 isDownloading = false
@@ -323,14 +251,6 @@ public final class UpdateChecker {
             isDownloading = false
             downloadError = "Download failed: \(error.localizedDescription)"
         }
-    }
-
-    /// Pulls the mounted volume path out of `hdiutil attach -plist` output.
-    nonisolated static func mountPoint(fromPlist data: Data) -> String? {
-        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
-              let root = plist as? [String: Any],
-              let entities = root["system-entities"] as? [[String: Any]] else { return nil }
-        return entities.compactMap { $0["mount-point"] as? String }.first
     }
 
     /// Detaches the mounted volume and deletes the downloaded image. Called when

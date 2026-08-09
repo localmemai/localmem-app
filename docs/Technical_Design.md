@@ -875,6 +875,17 @@ image and volume are cleaned up.
 Both subprocesses run off the main actor. `waitUntilExit()` on `@MainActor`
 froze the UI for the whole of `spctl` plus `hdiutil attach`.
 
+**Where the logic lives.** `localmem-app` has no test target, so anything left
+there can only be checked by running the app against the live API. The decisions
+worth verifying therefore sit in `LocalmemCore/UpdateRelease.swift` —
+`GitHubReleaseInfo` (tag parsing, DMG asset selection, the `## Security`
+predicate), `UpdateDecision.evaluate` (draft/prerelease filtering, highest-by-
+semver selection, the scan across intervening releases), and
+`DiskImageMount.mountPoint` — covered by `UpdateDecisionTests` and
+`DiskImageMountTests`. `UpdateChecker` in the app target is left with the parts
+that are genuinely environmental: the request, the subprocesses, and the UI
+state machine.
+
 **Why not Sparkle.** Sparkle's value is the *install* step — a helper process
 that outlives the app to swap a running bundle, EdDSA verification of the
 artifact, privilege escalation when `/Applications` isn't user-writable, and the

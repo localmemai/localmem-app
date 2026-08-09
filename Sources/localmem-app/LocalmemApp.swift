@@ -1270,6 +1270,19 @@ struct ContentView: View {
         .sheet(item: $updateChecker.pendingUpdate) { pending in
             UpdateModalView(release: pending.release, isSecurityFix: pending.isSecurityFix)
         }
+        // The outcome of a check the user asked for. Without this the message
+        // was written and never read: someone picking "Check for Updates…" from
+        // the menu bar got their answer as a small label in the opposite corner
+        // of the window, which is exactly the case a menu invocation can't rely
+        // on being noticed.
+        .alert("Software Update", isPresented: Binding(
+            get: { updateChecker.userInitiatedMessage != nil },
+            set: { if !$0 { updateChecker.userInitiatedMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(updateChecker.userInitiatedMessage ?? "")
+        }
     }
 
     // MARK: - Import / Export
