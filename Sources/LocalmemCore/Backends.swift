@@ -1,5 +1,11 @@
 import Foundation
-#if canImport(FoundationModels)
+// Apple's on-device model (macOS 26+, Apple Silicon). Every use of it — and of
+// any macOS-26-only API — lives behind this guard so the package still compiles
+// and runs on macOS 14/15 and Intel, where the framework is absent. The
+// `!LOCALMEM_NO_FOUNDATION_MODELS` clause lets CI force the framework off on a
+// macos-26 runner to compile-check that older path (see .github/workflows/ci.yml);
+// production builds never define it. Keep this two-part guard on every such site.
+#if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
 import FoundationModels
 #endif
 
@@ -192,7 +198,7 @@ public enum AppleModelLimits {
     static let maxSplitDepth = 2
 }
 
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
 
 /// Guided-generation shapes: constrained decoding guarantees well-formed
 /// output, so the malformed-JSON failure mode of the free-text path (#20)
@@ -398,7 +404,7 @@ public enum ExtractionBackends {
     public static func extractor(for backend: ExtractionBackend) -> FactExtractor {
         switch backend {
         case .apple:
-            #if canImport(FoundationModels)
+            #if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
             if #available(macOS 26, *) { return AppleFoundationExtractor() }
             #endif
             return AgentCLIExtractor(agentID: "claude-code")   // unreachable if gated correctly
@@ -410,7 +416,7 @@ public enum ExtractionBackends {
     public static func verifier(for backend: ExtractionBackend) -> FactVerifier {
         switch backend {
         case .apple:
-            #if canImport(FoundationModels)
+            #if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
             if #available(macOS 26, *) { return AppleFoundationVerifier() }
             #endif
             return AgentCLIVerifier(agentID: "claude-code")    // unreachable if gated correctly

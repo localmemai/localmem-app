@@ -57,3 +57,36 @@ jobs:
       - name: Test — CLI
         timeout-minutes: 6
         run: swift test --filter LocalmemTests --no-parallel
+
+  legacy-macos:
+    name: Build & test (no FoundationModels)
+    # Localmem supports macOS 14/15 and Intel, where Apple's FoundationModels
+    # framework is absent. GitHub's older-macOS runners don't ship Swift 6.2, so
+    # we can't build on them directly. Instead we force the framework off on the
+    # macos-26 runner via -DLOCALMEM_NO_FOUNDATION_MODELS, which compiles out the
+    # exact same code the older SDK would (every FoundationModels/macOS-26 API is
+    # behind `#if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS`).
+    # This guards against an unguarded macOS-26 API breaking the older build.
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26 (Swift 6.2)
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.app 2>/dev/null \
+            || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-legacy-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-legacy-
+
+      - name: Build (FoundationModels disabled)
+        run: swift build --build-tests -Xswiftc -DLOCALMEM_NO_FOUNDATION_MODELS
+
+      - name: Test (FoundationModels disabled)
+        run: swift test -Xswiftc -DLOCALMEM_NO_FOUNDATION_MODELS --no-parallel
