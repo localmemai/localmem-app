@@ -1032,9 +1032,16 @@ extension MemoryStore {
     /// otherwise delete the folder the memories were just moved into, dumping
     /// them in Inbox and dropping the destination's sensitivity with it.
     ///
-    /// Sensitivity is preserved conservatively: if any source folder is
-    /// sensitive, so is the result. Merging must never widen who can read a
-    /// memory.
+    /// **The destination's sensitivity wins.** Visibility is a property of the
+    /// folder, so memories arriving in it take its rule — exactly as when a
+    /// single memory is moved. Merging never rewrites the destination's own
+    /// setting, which would silently change visibility for memories already
+    /// filed there that the user never touched. Callers are responsible for
+    /// stating the outcome before committing.
+    ///
+    /// The one exception is a destination that does not exist yet: it has no
+    /// rule to respect, so it inherits sensitivity from the sources rather than
+    /// defaulting open and widening access unannounced.
     public func mergeFolders(ids: [UUID], intoName: String) async throws -> Folder {
         let name = intoName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw FolderError.invalidName }
@@ -1045,7 +1052,8 @@ extension MemoryStore {
         return try await database.write { db in
             let nowStr = DateFormat.iso8601.string(from: Date())
 
-            // Any source marked sensitive makes the destination sensitive.
+            // Only used when the destination has to be created — an existing
+            // folder keeps its own rule.
             let placeholdersAll = requested.map { _ in "?" }.joined(separator: ",")
             let anySensitive = (try Int.fetchOne(
                 db,
@@ -1057,18 +1065,8 @@ extension MemoryStore {
             if let row = try Row.fetchOne(
                 db, sql: "SELECT * FROM folders WHERE name = ? LIMIT 1", arguments: [name]
             ) {
-                var existing = try Folder(row: row)
-                if anySensitive && !existing.isSensitive {
-                    try db.execute(
-                        sql: "UPDATE folders SET sensitive = 1, updated_at = ? WHERE id = ?",
-                        arguments: [nowStr, existing.id.uuidString]
-                    )
-                    // Reflect the write in the returned value — callers use it to
-                    // update the UI, and a stale `false` would show the merged
-                    // folder as open while the database has it restricted.
-                    existing.isSensitive = true
-                }
-                dest = existing
+                // Destination rule: keep its sensitivity untouched.
+                dest = try Folder(row: row)
             } else {
                 let created = Folder(name: name, kind: .manual, isSensitive: anySensitive)
                 try db.execute(
@@ -1105,6 +1103,52 @@ extension MemoryStore {
             ), in: db)
 
             return dest
+        }
+    }
+
+    /// Moves memories into `folderID`, returning how many actually moved.
+    ///
+    /// Moving is how a memory is reclassified — visibility lives on the folder —
+    /// so this records an activity row when the move crosses a sensitivity
+    /// boundary. An organising gesture that quietly changes who can read a
+    /// memory should still be visible in the audit log.
+    @discardableResult
+    public func moveMemories(ids: [UUID], toFolder folderID: UUID) async throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        return try await database.write { db in
+            guard let destSensitive = try Bool.fetchOne(
+                db, sql: "SELECT sensitive FROM folders WHERE id = ?", arguments: [folderID.uuidString]
+            ) else { throw MemoryStoreError.notFound }
+
+            let idStrings = ids.map { $0.uuidString }
+            let placeholders = idStrings.map { _ in "?" }.joined(separator: ",")
+
+            let crossing = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM memories m
+                    JOIN folders f ON f.id = m.folder_id
+                    WHERE m.id IN (\(placeholders)) AND f.sensitive != ?
+                    """,
+                arguments: StatementArguments(idStrings) + [destSensitive ? 1 : 0]
+            ) ?? 0
+
+            try db.execute(
+                sql: "UPDATE memories SET folder_id = ?, updated_at = ? WHERE id IN (\(placeholders))",
+                arguments: StatementArguments([folderID.uuidString, DateFormat.iso8601.string(from: Date())])
+                    + StatementArguments(idStrings)
+            )
+            let moved = db.changesCount
+
+            if crossing > 0 {
+                try ActivityStore.add(Activity(
+                    actorKind: .cli,
+                    actorID: "user",
+                    operation: destSensitive ? "memory_restrict" : "memory_open",
+                    resultCount: crossing
+                ), in: db)
+            }
+            return moved
         }
     }
 

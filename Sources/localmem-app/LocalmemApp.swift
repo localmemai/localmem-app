@@ -637,6 +637,13 @@ final class MemoryStoreViewModel {
         await search(activeQuery)
     }
 
+    func moveMemories(ids: [UUID], toFolder folderID: UUID) async throws {
+        _ = try await store.moveMemories(ids: ids, toFolder: folderID)
+        await refreshFolderChildren()
+        await loadFoldersAndAgents()
+        await search(activeQuery)
+    }
+
     func mergeFolders(ids: [UUID], intoName: String) async throws {
         _ = try await store.mergeFolders(ids: ids, intoName: intoName)
         await refreshFolderChildren()
@@ -1944,6 +1951,65 @@ struct MemoriesView: View {
 /// row itself, so a restricted folder reads at a glance without opening
 /// settings. Clicking a folder shows its settings; clicking a memory shows
 /// the memory.
+/// A drag that has landed and is awaiting confirmation. Dragging is an
+/// organising gesture, but in this design moving something between folders is
+/// also how its visibility changes — so the dialog states the access outcome,
+/// not just the counts.
+struct PendingDrop: Identifiable {
+    enum Payload {
+        case memory(Memory)
+        case folder(Folder, memoryCount: Int)
+    }
+    let payload: Payload
+    let destination: Folder
+    var id: String {
+        switch payload {
+        case .memory(let m): return "m-\(m.id)-\(destination.id)"
+        case .folder(let f, _): return "f-\(f.id)-\(destination.id)"
+        }
+    }
+
+    var title: String {
+        switch payload {
+        case .memory(let m):
+            return "Move “\(m.title ?? m.headline ?? "memory")” to “\(destination.name)”?"
+        case .folder(let f, _):
+            return destination.kind == .default
+                ? "Move “\(f.name)” into Inbox?"
+                : "Merge “\(f.name)” into “\(destination.name)”?"
+        }
+    }
+
+    /// Only ever mentions access when access actually changes — a move that
+    /// stays on one side of the boundary should read as pure organisation.
+    var message: String {
+        switch payload {
+        case .memory(let m):
+            _ = m
+            if sourceSensitive == destination.isSensitive { return "" }
+            return destination.isSensitive
+                ? "It takes “\(destination.name)”'s setting and becomes hidden from agents set to non-sensitive only."
+                : "It takes “\(destination.name)”'s setting and becomes readable by every agent."
+        case .folder(let f, let count):
+            var lines: [String] = []
+            lines.append("\(count) memories move. “\(f.name)” is removed; no memory is deleted.")
+            // The destination's rule wins, in both directions — the same rule
+            // that applies to a single memory. The destination's own setting is
+            // never rewritten, so this only ever describes what happens to the
+            // memories being moved.
+            if f.isSensitive != destination.isSensitive {
+                lines.append(destination.isSensitive
+                    ? "They take “\(destination.name)”'s setting and become hidden from agents set to non-sensitive only."
+                    : "They take “\(destination.name)”'s setting and become readable by every agent.")
+            }
+            return lines.joined(separator: "\n\n")
+        }
+    }
+
+    /// Sensitivity of where the dragged item came from.
+    var sourceSensitive: Bool = false
+}
+
 struct FolderTreePane: View {
     let folders: [Folder]
     let memories: [Memory]
@@ -1956,6 +2022,9 @@ struct FolderTreePane: View {
 
     @State private var expanded: Set<UUID> = []
     @State private var hoveredRow: UUID?
+    @State private var dropTarget: UUID?
+    @State private var pendingDrop: PendingDrop?
+    @State private var hoverExpandTask: Task<Void, Never>?
     @State private var folderPendingDelete: Folder?
     @State private var memoryPendingDelete: Memory?
     // Persisted as a comma-joined list; the companion flag distinguishes
@@ -2107,6 +2176,25 @@ struct FolderTreePane: View {
         } message: {
             Text(memoryPendingDelete?.title ?? memoryPendingDelete?.headline ?? "")
         }
+        .confirmationDialog(
+            pendingDrop?.title ?? "",
+            isPresented: Binding(get: { pendingDrop != nil },
+                                 set: { if !$0 { pendingDrop = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(pendingDrop.map { drop in
+                if case .folder = drop.payload {
+                    return drop.destination.kind == .default ? "Move" : "Merge"
+                }
+                return "Move"
+            } ?? "Move") {
+                if let drop = pendingDrop { commitDrop(drop) }
+                pendingDrop = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDrop = nil }
+        } message: {
+            Text(pendingDrop?.message ?? "")
+        }
         .sheet(isPresented: $showNewFolder) {
             NewFolderSheet(
                 name: $newFolderName,
@@ -2122,6 +2210,92 @@ struct FolderTreePane: View {
                 }
             )
         }
+    }
+
+
+    // MARK: - Drag and drop
+
+    /// Dragging is the single gesture for both jobs: a memory onto a folder
+    /// reclassifies it, a folder onto a folder merges them. Both land here.
+    private func handleDrop(_ providers: [NSItemProvider], onto folder: Folder) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let raw = object as? String else { return }
+            Task { @MainActor in
+                stageDrop(raw, onto: folder)
+            }
+        }
+        return true
+    }
+
+    @MainActor
+    private func stageDrop(_ raw: String, onto folder: Folder) {
+        let parts = raw.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let id = UUID(uuidString: parts[1]) else { return }
+
+        switch parts[0] {
+        case "memory":
+            guard let memory = memories.first(where: { $0.id == id })
+                    ?? vm?.folderChildren.values.flatMap({ $0 }).first(where: { $0.id == id }),
+                  memory.folderID != folder.id else { return }
+            let from = vm?.folders.first { $0.id == memory.folderID }
+            pendingDrop = PendingDrop(payload: .memory(memory), destination: folder,
+                                      sourceSensitive: from?.isSensitive ?? false)
+        case "folder":
+            // Dropping a folder on itself is a no-op, not an error.
+            guard id != folder.id, let source = vm?.folders.first(where: { $0.id == id }) else { return }
+            pendingDrop = PendingDrop(payload: .folder(source, memoryCount: counts[source.id] ?? 0),
+                                      destination: folder,
+                                      sourceSensitive: source.isSensitive)
+        default:
+            return
+        }
+    }
+
+    @MainActor
+    private func commitDrop(_ drop: PendingDrop) {
+        Task {
+            switch drop.payload {
+            case .memory(let memory):
+                try? await vm?.moveMemories(ids: [memory.id], toFolder: drop.destination.id)
+            case .folder(let source, _):
+                if drop.destination.kind == .default {
+                    // Merging into Inbox is exactly delete: contents go to
+                    // Inbox and the folder disappears.
+                    try? await vm?.deleteFolder(id: source.id)
+                } else {
+                    try? await vm?.mergeFolders(ids: [source.id], intoName: drop.destination.name)
+                }
+                if selectedFolderID == source.id { selectedFolderID = drop.destination.id }
+            }
+        }
+    }
+
+    private func targetBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { dropTarget == id },
+            set: { isTargeted in
+                dropTarget = isTargeted ? id : (dropTarget == id ? nil : dropTarget)
+                hoverExpandTask?.cancel()
+                guard isTargeted, !expanded.contains(id) else { return }
+                // Hovering a collapsed folder opens it, so a memory can be
+                // dropped into a folder whose contents aren't showing.
+                hoverExpandTask = Task {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    guard !Task.isCancelled, dropTarget == id else { return }
+                    expanded.insert(id)
+                    await vm?.loadChildren(of: id)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func dropHighlight(for id: UUID) -> some View {
+        RoundedRectangle(cornerRadius: 5)
+            .strokeBorder(Color.accentColor, lineWidth: 2)
+            .opacity(dropTarget == id ? 1 : 0)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -2192,6 +2366,18 @@ struct FolderTreePane: View {
                 .fill(isSelected ? Color.accentColor : Color.clear)
         )
         .onHover { hoveredRow = $0 ? folder.id : (hoveredRow == folder.id ? nil : hoveredRow) }
+        .overlay(dropHighlight(for: folder.id))
+        // Inbox is never a drag source — it cannot be deleted, and a merge
+        // consumes the folder being dragged. An empty provider makes the drag
+        // simply not start.
+        .onDrag {
+            folder.kind == .default
+                ? NSItemProvider()
+                : NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
+        }
+        .onDrop(of: [.text], isTargeted: targetBinding(folder.id)) { providers in
+            handleDrop(providers, onto: folder)
+        }
         .help(folder.isSensitive ? "\(folder.name) — sensitive" : folder.name)
     }
 
@@ -2235,6 +2421,7 @@ struct FolderTreePane: View {
         }
         .buttonStyle(.plain)
         .onHover { hoveredRow = $0 ? memory.id : (hoveredRow == memory.id ? nil : hoveredRow) }
+        .onDrag { NSItemProvider(object: "memory:\(memory.id.uuidString)" as NSString) }
         .contextMenu {
             Button("Delete", role: .destructive) { memoryPendingDelete = memory }
         }

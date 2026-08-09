@@ -595,7 +595,7 @@ struct MemoryStoreTests {
         #expect(try await store.get(id: b.id)?.folderID == keep.id)
     }
 
-    @Test func mergingASensitiveFolderKeepsTheResultSensitive() async throws {
+    @Test func mergingAppliesTheDestinationsSensitivity() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -603,12 +603,36 @@ struct MemoryStoreTests {
                                                   projectRoot: nil, isSensitive: true)
         let open = try await store.createFolder(name: "Notes", kind: .manual,
                                                 projectRoot: nil, isSensitive: false)
+        let m = try await store.add(content: "was private", type: .fact,
+                                    folderID: secret.id, actorKind: .cli, actorID: "user")
 
-        // Merging must never widen who can read a memory.
-        let dest = try await store.mergeFolders(ids: [secret.id, open.id], intoName: "Notes")
-        #expect(dest.isSensitive)
+        // Destination rule, same as moving a single memory: the folder the
+        // memories land in defines their visibility, and merging never rewrites
+        // the destination's own setting — that would change visibility for
+        // memories already filed there that nobody touched.
+        let dest = try await store.mergeFolders(ids: [secret.id], intoName: "Notes")
+        #expect(dest.id == open.id)
+        #expect(dest.isSensitive == false)
         let refreshed = try #require(try await store.listFolders().first { $0.id == dest.id })
-        #expect(refreshed.isSensitive)
+        #expect(refreshed.isSensitive == false)
+        #expect(try await store.get(id: m.id)?.folderID == open.id)
+
+        // A restricted agent can now read it, because its folder is open.
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+        #expect(try await store.search(query: "private", limit: 10,
+                                       requestingAgent: "codex").memories.count == 1)
+    }
+
+    @Test func mergingIntoANewFolderCarriesSensitivityForward() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        // A destination that does not exist yet has no rule to respect, so it
+        // must not default open and widen access unannounced.
+        let dest = try await store.mergeFolders(ids: [secret.id], intoName: "Archive")
+        #expect(dest.isSensitive)
     }
 
     @Test func importingAnArchiveWithAnUnknownFolderFilesItInInbox() async throws {
@@ -658,6 +682,59 @@ struct MemoryStoreTests {
         let ops = Set(try await activity.recent(limit: 50).map(\.operation))
         #expect(ops.contains("folder_restrict"))
         #expect(ops.contains("agent_restrict"))
+    }
+
+    @Test func movingAMemoryAcrossASensitivityBoundaryIsAudited() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activity = ActivityStore(database: try LocalmemDatabase(url: url))
+
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        let m = try await store.add(content: "movable", type: .note, actorKind: .cli, actorID: "user")
+
+        // Inbox -> sensitive: the memory's readership narrows, so it is logged.
+        #expect(try await store.moveMemories(ids: [m.id], toFolder: secret.id) == 1)
+        #expect(try await store.get(id: m.id)?.folderID == secret.id)
+        var ops = Set(try await activity.recent(limit: 50).map(\.operation))
+        #expect(ops.contains("memory_restrict"))
+
+        // And back again.
+        _ = try await store.moveMemories(ids: [m.id], toFolder: Self.inboxID)
+        ops = Set(try await activity.recent(limit: 50).map(\.operation))
+        #expect(ops.contains("memory_open"))
+    }
+
+    @Test func movingWithinTheSameSensitivityIsNotAnAccessEvent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activity = ActivityStore(database: try LocalmemDatabase(url: url))
+
+        let a = try await store.createFolder(name: "A", kind: .manual, projectRoot: nil, isSensitive: false)
+        let m = try await store.add(content: "plain", type: .note, actorKind: .cli, actorID: "user")
+
+        // Inbox and A are both open, so this is pure organisation.
+        _ = try await store.moveMemories(ids: [m.id], toFolder: a.id)
+        let ops = Set(try await activity.recent(limit: 50).map(\.operation))
+        #expect(!ops.contains("memory_restrict"))
+        #expect(!ops.contains("memory_open"))
+    }
+
+    @Test func mergingASensitiveFolderIntoInboxLeavesInboxOpen() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "secret", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+
+        // Inbox is the guaranteed safe home. A merge must never flip it, or one
+        // drag would hide the whole default folder from restricted agents.
+        let dest = try await store.mergeFolders(ids: [secret.id], intoName: "Inbox")
+        #expect(dest.isSensitive == false)
+        let inbox = try #require(try await store.listFolders().first { $0.kind == .default })
+        #expect(inbox.isSensitive == false)
     }
 
     // MARK: - Supersession
