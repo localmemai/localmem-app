@@ -117,7 +117,8 @@ Once setup finishes, restart your AI clients and they'll have Localmem
 available. Try telling one "remember that I prefer flat whites" — then ask a
 fresh session in another project what you like to drink.
 
-Homebrew and a curl installer are planned as additional channels.
+The DMG is currently the only install channel; Homebrew and a curl installer are
+possibilities, not commitments.
 
 ## CLI
 

@@ -806,8 +806,9 @@ v1 ships a single channel — the **notarized DMG** — and defers the CLI chann
   baked into client configs is unchanged, so registrations survive. The app
   surfaces its version and tells the user when a newer one exists — see
   "Version display & update checking" below.
-- **Deferred:** Homebrew formula + curl script (CLI-only channels), a Homebrew
-  Cask, a ZIP artifact, and Sparkle auto-updates — see the target shape below.
+- **Not planned:** Homebrew formula + curl script (CLI-only channels), a Homebrew
+  Cask, a ZIP artifact, and Sparkle auto-updates. The DMG is the only channel and
+  the only one on the books — see the target shape below.
 
 **Update safety.** User data is never inside the bundle: memories live in
 `~/Library/Application Support/Localmem/`, instruction files in `~/.localmem/`,
@@ -830,8 +831,8 @@ app should not pretend otherwise:
 
 | Channel | Who owns the update | What the app does |
 |---|---|---|
-| DMG (today's only channel) | Us | Manual check + assisted download (below) |
-| Homebrew cask (planned) | Homebrew | Nothing — `brew upgrade` is the contract |
+| DMG (today's only channel) | Us | Opt-in check + assisted download (below) |
+| Homebrew cask (**not planned** — see below) | Homebrew | Nothing — `brew upgrade` would be the contract |
 
 **Triggers.** Manual at any time — the footer cell, **Check Now** in Settings, or
 **Localmem → Check for Updates…**. Automatic on launch, at most once per 24h,
@@ -918,12 +919,22 @@ all to replace one drag gesture. Revisit only if *silent background* updates eve
 become the goal, which is a different product decision. The GitHub releases API
 is the appcast.
 
-**The accepted cost.** Nobody clicks "check for updates," so real-world update
-adoption will be poor, and a security fix reaches users slowly. Two things
-mitigate it and neither is in the app: the Homebrew cask, where `brew upgrade`
-is a habit users already have, and the release notes / README. If adoption ever
-demonstrably matters more than the §5 claim, the decision to revisit is the
-*automatic check*, not Sparkle.
+**The opt-in check is the whole update story.** With Homebrew not planned and
+Sparkle ruled out, the DMG is the only channel and the in-app check is the only
+mechanism that reaches a user who isn't already watching the repo. Nobody clicks
+"check for updates" unprompted, so the share of users who ever learn a release
+exists is roughly the share who left the wizard toggle on.
+
+Two consequences worth holding onto:
+
+- **The wizard's update screen carries more weight than its size suggests.** It
+  is the only moment the product asks, and the answer governs update reach for
+  the lifetime of that install.
+- **If a security fix ever has to move faster than this, the lever is the
+  check's cadence, not an installer.** Checking on launch regardless of the
+  toggle, or a nag for security-flagged releases specifically, are both smaller
+  changes than Sparkle and address the actual gap. Neither is worth doing
+  pre-emptively.
 
 **Known wrinkle:** an AI client may be running `localmem-mcp` out of the old
 bundle during the swap. Replacing a bundle under a running process is safe on
@@ -933,22 +944,25 @@ risk; worth knowing when triaging "I updated but the version didn't change."
 
 ### Target shape (later releases)
 
-Ship both families of channels — they're different artifacts for different
-audiences:
+**The DMG is the only channel, and there is no second one planned.** Homebrew —
+formula for the CLI, cask for the app — was the obvious candidate and is
+explicitly **not being done now**. Sparkle is ruled out on its own merits. So
+the shape below is what a later release *could* add, not a commitment:
 
-- **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both install
-  `localmem` + `localmem-mcp`.
+- **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both would
+  install `localmem` + `localmem-mcp`.
 - **App:** the DMG **+** a Homebrew **Cask**. No ZIP — nothing consumes one now
   that Sparkle is ruled out.
-- **Updates:** `brew upgrade` for anything installed by Homebrew; the in-app
-  manual check + assisted download for the DMG channel. **Sparkle is not
+- **Updates:** `brew upgrade` for anything Homebrew installed; the in-app
+  opt-in check + assisted download for the DMG channel. **Sparkle is not
   planned** — see "Version display & update checking" above for why.
 - **Skip the PKG** unless the website installer specifically needs to configure
   the CLI without the app touching `/usr/local/bin`.
 
-The **Homebrew cask is the highest-leverage remaining work on updates**, not
-anything in-app: `brew upgrade` is a habit this audience already has, and it
-covers the CLI at the same time.
+If the channel question is reopened, the cask is the one worth doing first:
+`brew upgrade` is a habit this audience already has, it covers the CLI at the
+same time, and it is far cheaper than an in-app installer. But it buys update
+*reach*, which is only worth paying for once reach is the thing hurting.
 
 **Version skew** (a bundled CLI vs. a separate Homebrew CLI) is mitigated by
 setup being idempotent and the app's status view flagging + repairing a stale
@@ -988,9 +1002,9 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
   ranking); append-only supersession edges; two-pass extract → verify on the
   write path (§10); folders with per-folder agent visibility (§8); graceful
   degradation on older macOS.
-- **next** — version cell in the footer with a manual update check and assisted
+- **next** — version cell in the footer with an opt-in update check and assisted
   download (§12); vault-level dedup; folder merge/rename ergonomics as
-  auto-created project folders accumulate; Homebrew channel (formula + cask).
+  auto-created project folders accumulate.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
@@ -1014,10 +1028,12 @@ the constraint, retrieval is.
    `LocalmemCore` so CLI, MCP, and GUI agree on source strings.
 4. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
    forever)?
-5. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
-   where release artifacts live (GitHub Releases vs. own CDN). *Settled:* DMG
-   only (no ZIP), Homebrew cask yes, Sparkle no, and update checks are manual
-   only — see §12.
-6. **Update adoption** — the manual-only check trades reach for the unqualified
-   §5 claim. Revisit if a security fix ever needs to land faster than users
-   happen to click; the lever is an automatic check, not an in-place installer.
+5. **Distribution specifics** — where release artifacts live (GitHub Releases
+   vs. own CDN); whether a second channel is ever worth adding, and if so
+   whether the CLI leads with brew or curl. *Settled:* DMG only (no ZIP),
+   Sparkle no, Homebrew not now, and the update check is opt-in at setup —
+   see §12.
+6. **Update adoption** — with no Homebrew channel, the opt-in check is the only
+   thing that reaches a user who isn't watching the repo, so reach is bounded by
+   how many leave the wizard toggle on. Revisit if a security fix has to land
+   faster than that; the lever is the check's cadence, not an installer.
