@@ -116,10 +116,24 @@ public actor ExtractionEngine {
             updated.lastRunAt = Date()
             try? await sourceStore.update(updated)
 
+            // A successful run that stored nothing needs a reason the UI can
+            // show — a bare "success, 0 memories" reads as a silent failure.
+            // The reader's own reason (e.g. truncation) takes precedence.
+            var reasonCode = result.reasonCode
+            var reason = result.error
+            if memories.isEmpty, reasonCode == nil {
+                reasonCode = "no_facts"
+                reason = extracted.isEmpty
+                    ? "No personal facts found — nothing in this document is about you, "
+                      + "your preferences, decisions, or ongoing work."
+                    : "No personal facts found — curation dropped every candidate as "
+                      + "document content rather than a durable fact about you."
+            }
+
             return await record(SourceFileState(
                 relPath: rel, contentSHA256: result.sha256, modifiedAt: result.modifiedAt,
                 processedAt: Date(), status: result.truncated ? .partial : .processed,
-                reasonCode: result.reasonCode, error: result.error, factCount: memories.count,
+                reasonCode: reasonCode, error: reason, factCount: memories.count,
                 extractedCount: extracted.count, keptCount: memories.count),
                 for: source)
         } catch {
@@ -156,12 +170,14 @@ public actor ExtractionEngine {
     }
 
     /// keep → as-is, revise → repaired fact, drop → excluded with the reason
-    /// debug-logged (never persisted) — free tuning data for the prompts.
+    /// logged at notice so it reaches the on-disk log (the file sink is
+    /// notice-and-above) — otherwise "N extracted → 0 kept" is undiagnosable
+    /// after the fact. Drops are rare enough that this can't flood the log.
     private static func apply(_ verdicts: [FactVerdict], to candidates: [ExtractedFact],
                               relPath: String) -> [ExtractedFact] {
         let (kept, dropped) = VerdictApplication.split(verdicts, candidates: candidates)
         for (candidate, reason) in dropped {
-            Log.debug(.store, "verifier dropped candidate", [
+            Log.notice(.store, "verifier dropped candidate", [
                 "file": relPath, "title": candidate.title, "reason": reason,
             ])
         }
