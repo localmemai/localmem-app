@@ -484,6 +484,53 @@ struct MemoryStoreTests {
         #expect(recent.withheld == 1)
     }
 
+    /// A search whose every match is sensitive returns nothing — and has to say
+    /// so. This previously reported `withheld: 0`, because the empty-result
+    /// early return threw the count away, so a fully blocked read was
+    /// indistinguishable from one that simply found nothing. It is also the
+    /// case that matters: the MCP server writes its `access_filtered` audit row
+    /// only when this is greater than zero, so total denial left no trace.
+    @Test func aFullyBlockedSearchStillReportsWhatWasWithheld() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Acme Corp", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "acme staging sits behind the VPN", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "acme renews at the end of Q3", type: .project,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+
+        try await store.setAgentStatus(id: "cursor", status: .nonSensitiveOnly)
+
+        let blocked = try await store.search(query: "acme", limit: 10, requestingAgent: "cursor")
+        #expect(blocked.memories.isEmpty)
+        #expect(blocked.withheld == 2)
+
+        // The same query for an unrestricted agent: everything, nothing withheld.
+        let allowed = try await store.search(query: "acme", limit: 10, requestingAgent: "claude-code")
+        #expect(allowed.memories.count == 2)
+        #expect(allowed.withheld == 0)
+    }
+
+    /// A query matching nothing at all must not claim anything was withheld —
+    /// the fix above must not report the whole sensitive folder for an unrelated
+    /// search.
+    @Test func aSearchThatMatchesNothingWithholdsNothing() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Acme Corp", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "acme staging sits behind the VPN", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "cursor", status: .nonSensitiveOnly)
+
+        let miss = try await store.search(query: "zeppelin", limit: 10, requestingAgent: "cursor")
+        #expect(miss.memories.isEmpty)
+        #expect(miss.withheld == 0)
+    }
+
     @Test func unknownAgentsDefaultToFullAccess() async throws {
         let (store, url) = try makeStore()
         defer { try? FileManager.default.removeItem(at: url) }

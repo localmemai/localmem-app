@@ -542,7 +542,14 @@ public actor MemoryStore {
                 """
             
             let orderedIDs = try String.fetchAll(db, sql: sql, arguments: [fts, statusVal, clampedLimit])
-            guard !orderedIDs.isEmpty else { return (memories: [], withheld: 0) }
+            // Report the count even with nothing to show. Returning 0 here hid
+            // exactly the case worth surfacing: when *every* match sits in a
+            // sensitive folder the filtered query comes back empty, so a fully
+            // blocked read looked identical to a search that simply found
+            // nothing. Partial filtering reported fine; total denial did not,
+            // and `ToolRegistry` writes its `access_filtered` row only when
+            // this is greater than zero.
+            guard !orderedIDs.isEmpty else { return (memories: [], withheld: totalWithheld) }
             let placeholders = Self.placeholders(count: orderedIDs.count)
             let rows = try Row.fetchAll(
                 db,

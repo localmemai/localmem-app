@@ -886,7 +886,7 @@ final class VaultStatusViewModel {
     private(set) var lastActivity: Date?
     private(set) var memoryCount = 0
     private(set) var accessesToday = 0
-    private(set) var blockedCount = 0           // We don't yet record blocks.
+    private(set) var blockedCount = 0
     private(set) var recentActivity: [Activity] = []
 
     private let activityStore: ActivityStore
@@ -909,7 +909,13 @@ final class VaultStatusViewModel {
         memoryCount     = (try? await memoryStore.count()) ?? 0
 
         let startOfToday = Calendar.current.startOfDay(for: Date())
-        accessesToday = rows.filter { $0.occurredAt >= startOfToday }.count
+        let today = rows.filter { $0.occurredAt >= startOfToday }
+        accessesToday = today.count
+        // Reads an agent was not allowed to see. Previously hardcoded to 0 with
+        // a comment saying blocks were not recorded — they are, as
+        // `access_filtered` (some results withheld) and `access_blocked` (the
+        // whole call refused). Same today-window as the accesses card beside it.
+        blockedCount = today.filter { Activity.blockedOperations.contains($0.operation) }.count
     }
 
     func setLocked(_ locked: Bool) { vaultLocked = locked }
