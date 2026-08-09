@@ -21,6 +21,9 @@ struct AddCommand: AsyncParsableCommand {
             help: "Add a tag. Repeat the flag for multiple tags.")
     var tags: [String] = []
 
+    @Option(help: "Folder to file the memory into — name or UUID. Defaults to Inbox.")
+    var folder: String?
+
     @Flag(help: "Emit JSON of the created memory.")
     var json: Bool = false
 
@@ -31,6 +34,7 @@ struct AddCommand: AsyncParsableCommand {
             type: type,
             title: title,
             tags: tags,
+            folderID: try await resolveFolderID(store),
             actorKind: .cli,
             actorID: "user"
         )
@@ -39,6 +43,22 @@ struct AddCommand: AsyncParsableCommand {
         } else {
             OutputFormatter.printDetail(memory)
         }
+    }
+
+    /// `folder create` existed with no way to put anything in the folder it
+    /// made. Accepts a UUID or a name, matched case-insensitively so
+    /// `--folder inbox` works.
+    private func resolveFolderID(_ store: MemoryStore) async throws -> UUID? {
+        guard let folder, !folder.isEmpty else { return nil }
+        if let uuid = UUID(uuidString: folder) { return uuid }
+        let folders = try await store.listFolders()
+        guard let match = folders.first(where: {
+            $0.name.compare(folder, options: .caseInsensitive) == .orderedSame
+        }) else {
+            let names = folders.map(\.name).sorted().joined(separator: ", ")
+            throw ValidationError("No folder named \"\(folder)\". Existing folders: \(names)")
+        }
+        return match.id
     }
 }
 

@@ -287,6 +287,31 @@ private struct ThemeChip: View {
 
 // MARK: - Sections (Phase 2)
 
+/// The app is driven into fixed states for marketing captures
+/// (`scripts/screenshots.sh`) rather than clicked through by hand. Screenshot
+/// mode suppresses anything non-deterministic or off-brand in a still: the
+/// first-run wizard, the update check's network call, and persisted UI state
+/// carried over from whatever vault the developer normally uses.
+enum ScreenshotMode {
+    static let isActive: Bool = {
+        let env = ProcessInfo.processInfo.environment
+        return env["LOCALMEM_INITIAL_SECTION"] != nil || env["LOCALMEM_SHOW_WIZARD"] == "1"
+    }()
+
+    /// `LOCALMEM_SELECT_TITLE` picks which memory opens in the detail pane, so
+    /// the vault capture shows real content and tags instead of the "Select a
+    /// memory" placeholder.
+    ///
+    /// Matched as a case-insensitive substring: the capture script packs several
+    /// assignments into one shell word, so a value containing a space cannot
+    /// survive the trip. `Coffee` finds "Coffee preference".
+    static let selectTitle: String? = {
+        ProcessInfo.processInfo.environment["LOCALMEM_SELECT_TITLE"].flatMap {
+            $0.isEmpty ? nil : $0
+        }
+    }()
+}
+
 enum AppSection: String, CaseIterable, Hashable {
     case overview, memories, agents, audit, connectors
 
@@ -1023,6 +1048,7 @@ struct ContentView: View {
     @State private var query = ""
     @State private var sheet: SheetKind?
     @State private var memorySelection: Memory.ID?
+    @Environment(\.openSettings) private var openSettingsAction
     @State private var selectedFolderID: UUID? = nil
     @State private var auditMemoryFilter: Memory.ID?
     @AppStorage("seenMigrationWarning") private var seenMigrationWarning = false
@@ -1167,8 +1193,19 @@ struct ContentView: View {
             // defaults to true, so checking before the user has seen the
             // toggle would fire the request they were about to decline —
             // the first run is exactly when the promise matters most.
-            if seenWizard {
+            //
+            // Screenshot runs are excluded too: a capture should never make a
+            // network call, and an update dialog appearing mid-capture would
+            // land in a marketing screenshot.
+            if seenWizard && !ScreenshotMode.isActive {
                 Task { await updateChecker.checkOnLaunchIfDue() }
+            }
+
+            // `LOCALMEM_SHOW_SETTINGS=1` opens the Settings window at launch so
+            // it can be captured without a click. It opens over the main
+            // window; scripts/screenshots.sh targets it by title.
+            if env["LOCALMEM_SHOW_SETTINGS"] == "1" {
+                openSettingsAction()
             }
         }
         .task(id: query) { await memoryVM?.search(query) }
@@ -2339,7 +2376,14 @@ struct FolderTreePane: View {
             }
         }
         .onAppear {
-            if hasFolderExpansionState {
+            // Screenshot runs open every folder and ignore saved state.
+            // `expandedFolderIDs` is UserDefaults — global — while the vault is
+            // not, so a screenshot run against the demo vault inherited folder
+            // ids from the developer's real vault, matched none of them, and
+            // rendered a fully collapsed tree.
+            if ScreenshotMode.isActive {
+                expanded = Set(folders.map(\.id))
+            } else if hasFolderExpansionState {
                 expanded = Set(
                     expandedFolderIDs
                         .split(separator: ",")
@@ -2361,6 +2405,18 @@ struct FolderTreePane: View {
         .onChange(of: expanded) { _, newValue in
             hasFolderExpansionState = true
             expandedFolderIDs = newValue.map(\.uuidString).joined(separator: ",")
+        }
+        // Memories arrive asynchronously, so the selection can't be made in
+        // onAppear — the list is still empty there.
+        .onChange(of: memories.count) { _, _ in
+            guard ScreenshotMode.isActive, selection == nil,
+                  let wanted = ScreenshotMode.selectTitle,
+                  let match = memories.first(where: {
+                      $0.title?.localizedCaseInsensitiveContains(wanted) == true
+                  })
+            else { return }
+            selection = match.id
+            selectedFolderID = match.folderID
         }
         .onChange(of: selectedFolderID) { _, newValue in
             // The folder selection is restored asynchronously after folders

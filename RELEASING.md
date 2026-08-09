@@ -36,6 +36,22 @@ Two things the automation **cannot** check for you. Both are below.
 3. **Sanity-check the release notes render**, since the update dialog shows the
    raw body text.
 
+4. **Regenerate the screenshots if the UI moved.**
+
+   ```bash
+   ./scripts/screenshots.sh      # run from Terminal, not from an IDE
+   ```
+
+   Seeds a fictional vault and captures each screen against it, so nothing
+   personal is ever photographed. Requires Screen Recording permission; macOS
+   prompts on the first attempt, but only when the request comes from a terminal
+   with a UI — from a background helper it fails silently.
+
+   Screenshots rot quietly, and stale ones are worse than none: `vault.png` once
+   sat beside a caption promising folders while showing a build that had none,
+   and `access.png` advertised a section that had been removed entirely. Check
+   each caption in `web/index.html` still matches its image.
+
 ## Tag and push
 
 ```bash
