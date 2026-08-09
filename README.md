@@ -67,12 +67,13 @@ search, permissions, and audit behavior:
 
 ### MCP tools
 
-Agents interact with Localmem through four tools:
+Agents interact with Localmem through five tools:
 
-- `memory_store` — persist a new fact, preference, or decision
-- `memory_search` — full-text search over stored memories
-- `memory_recent` — most-recent-first listing
-- `memory_update` — replace fields on an existing memory
+- `memory_store` — persist a new fact, preference, or decision. Supports optional `supersedes` parameter to deprecate older entries.
+- `memory_search` — full-text search over stored memories (returns compact metadata without verbatim body).
+- `memory_recent` — most-recent-first listing (returns compact metadata without verbatim body).
+- `memory_get` — retrieve the full verbatim body for a set of memory IDs.
+- `memory_update` — replace fields on an existing memory.
 
 ### Supported clients
 

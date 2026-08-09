@@ -16,7 +16,7 @@ struct ToolRegistry: Sendable {
     // MARK: - Descriptors
 
     var toolDescriptors: [Tool] {
-        [storeTool, searchTool, recentTool, updateTool]
+        [storeTool, getTool, searchTool, recentTool, updateTool]
     }
 
     private var storeTool: Tool {
@@ -75,6 +75,11 @@ struct ToolRegistry: Sendable {
                 Good:  ["coffee", "preference"]  ["role", "fact"]  ["morning_routine"]
                 Bad:   ["preferences"]  ["User Preference"]  ["user_profile"]
 
+            • supersedes (optional): an array of memory UUIDs that are superseded
+              and replaced by this new memory. Replaces the history trail.
+
+            • headline (optional): a custom short 1-line summary (max 120 chars) for this memory.
+
             CANONICAL EXAMPLE:
             User: "I'm a Go engineer, mostly backend, allergic to frontend work."
             Three separate calls — one fact per memory:
@@ -97,8 +102,13 @@ struct ToolRegistry: Sendable {
                         "type": "string",
                         "description": "3-6 word noun phrase, sentence case, no trailing period, no 'User' prefix.",
                     ],
+                    "headline": [
+                        "type": "string",
+                        "description": "Optional short summary (max 120 chars) to display in lists.",
+                    ],
                     "type": [
                         "type": "string",
+                        "description": "The category classification of the memory.",
                         "enum": .array(MemoryType.allCases.map { .string($0.rawValue) }),
                         "default": "note",
                     ],
@@ -107,7 +117,40 @@ struct ToolRegistry: Sendable {
                         "items": ["type": "string"],
                         "default": .array([]),
                     ],
+                    "supersedes": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Array of memory UUIDs that are superseded and replaced by this new memory.",
+                    ],
                 ],
+            ]
+        )
+    }
+
+    private var getTool: Tool {
+        Tool(
+            name: "memory_get",
+            description: """
+            Retrieve the full verbatim body content for one or more memories by their UUIDs.
+
+            USE WHEN:
+            • You have performed a `memory_search` or `memory_recent` and received a compact list of results.
+            • You have selected one or more candidate memories whose full details/text you actually need to read.
+            • You want to fetch the exact history or logs of a specific superseded memory chain.
+
+            ARGS:
+            • ids (required): an array of memory UUID strings to retrieve the full body content for.
+            """,
+            inputSchema: [
+                "type": "object",
+                "required": ["ids"],
+                "properties": [
+                    "ids": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "An array of memory UUID strings to retrieve the full body content for."
+                    ]
+                ]
             ]
         )
     }
@@ -118,6 +161,12 @@ struct ToolRegistry: Sendable {
             description: """
             Full-text search over Localmem. Returns matches newest-first. Cheap — call
             it whenever you need context, do not try to "remember" from prior turns.
+
+            CRITICAL WARNING:
+            • Results returned by search are COMPACT index objects containing metadata
+              (headline, supersededBy, tags) but NO 'content' body.
+            • Once you select the relevant candidates, you MUST call `memory_get(ids)`
+              to load their full verbatim bodies.
 
             USE BEFORE ANSWERING:
             • Any question that depends on prior conversations ("pick up where we left off",
@@ -136,6 +185,8 @@ struct ToolRegistry: Sendable {
             ARGS:
             • query (required): the search string.
             • limit (optional, default 20, max 50): cap on result count.
+            • includeSuperseded (optional, default false): if true, includes memories
+              that have been replaced by newer ones, de-ranked to the bottom.
 
             VISIBILITY:
             • Results omit memories whose per-memory access list excludes this MCP client.
@@ -155,6 +206,11 @@ struct ToolRegistry: Sendable {
                         "maximum": 50,
                         "default": 20,
                     ],
+                    "includeSuperseded": [
+                        "type": "boolean",
+                        "description": "If true, include superseded memories in search, de-ranked to the bottom.",
+                        "default": false,
+                    ],
                 ],
             ]
         )
@@ -167,6 +223,12 @@ struct ToolRegistry: Sendable {
             Returns the N most recently created memories, newest first. The
             no-keyword companion to `memory_search`: use it when you need ambient
             context and don't yet have a concrete search term.
+
+            CRITICAL WARNING:
+            • Results returned are COMPACT index objects containing metadata
+              (headline, supersededBy, tags) but NO 'content' body.
+            • Once you select the relevant candidates, you MUST call `memory_get(ids)`
+              to load their full verbatim bodies.
 
             USE WHEN:
             • The user opens a session and references "what we talked about last time"
@@ -181,6 +243,8 @@ struct ToolRegistry: Sendable {
 
             ARGS:
             • limit (optional, default 20, max 50): how many to return.
+            • includeSuperseded (optional, default false): if true, includes memories
+              that have been replaced by newer ones, de-ranked to the bottom.
 
             VISIBILITY:
             • Results omit memories whose per-memory access list excludes this MCP client.
@@ -197,6 +261,11 @@ struct ToolRegistry: Sendable {
                         "minimum": 1,
                         "maximum": 50,
                         "default": 20,
+                    ],
+                    "includeSuperseded": [
+                        "type": "boolean",
+                        "description": "If true, include superseded memories, de-ranked to the bottom.",
+                        "default": false,
                     ],
                 ],
             ]
@@ -228,11 +297,13 @@ struct ToolRegistry: Sendable {
             • id (required): full UUID of the memory to update. Call
               `memory_search` or `memory_recent` first to find it.
             • title (optional): new title. Omit to keep the existing one.
+            • headline (optional): new short summary. Omit to keep existing.
             • content (optional): new content. Omit to keep existing.
             • type (optional): one of `preference`, `decision`, `fact`,
               `project`, `note`. Omit to keep existing.
             • tags (optional): full replacement of the tag list. Omit to keep
               the existing tags; pass `[]` to clear them.
+            • supersedes (optional): replacement array of superseded UUIDs.
 
             EXAMPLE:
             User: "Actually I drink oat-milk cortados now, not flat whites."
@@ -251,6 +322,10 @@ struct ToolRegistry: Sendable {
                         "type": "string",
                         "description": "Replacement title. Omit to keep existing.",
                     ],
+                    "headline": [
+                        "type": "string",
+                        "description": "Replacement short summary. Omit to keep existing.",
+                    ],
                     "content": [
                         "type": "string",
                         "description": "Replacement content, third person, present tense, terminal punctuation.",
@@ -263,6 +338,11 @@ struct ToolRegistry: Sendable {
                         "type": "array",
                         "items": ["type": "string"],
                         "description": "Replacement tag list. Pass [] to clear tags.",
+                    ],
+                    "supersedes": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Replacement array of superseded UUIDs. Omit to keep existing.",
                     ],
                 ],
             ]
@@ -303,6 +383,7 @@ struct ToolRegistry: Sendable {
         switch name {
         // memory_store's audit row is written inside store.add's transaction.
         case "memory_store":  return try await handleStore(args)
+        case "memory_get":    return try await handleGet(args)
         case "memory_search": return try await handleSearch(args)
         case "memory_recent": return try await handleRecent(args)
         case "memory_update": return try await handleUpdate(args)
@@ -336,15 +417,56 @@ struct ToolRegistry: Sendable {
                 .prefix(Self.maxTagCount)
         )
 
+        let supersedes = (args["supersedes"]?.arrayValue?.compactMap { $0.stringValue } ?? [])
+            .compactMap { UUID(uuidString: $0) }
+        let headline = args["headline"]?.stringValue
+
         let memory = try await store.add(
             content: content,
             type: type,
             title: title,
+            headline: headline,
             tags: tags,
+            supersedes: supersedes,
             actorKind: .mcp,
             actorID: await identity.name
         )
         return .init(content: [.plainText("{\"id\":\"\(memory.id.uuidString)\"}")])
+    }
+
+    private func handleGet(_ args: [String: Value]) async throws -> CallTool.Result {
+        guard let idsValue = args["ids"]?.arrayValue else {
+            throw MCPError.invalidParams("`ids` is required and must be an array of UUID strings.")
+        }
+        let uuids = idsValue.compactMap { $0.stringValue }.compactMap { UUID(uuidString: $0) }
+        guard !uuids.isEmpty else {
+            throw MCPError.invalidParams("`ids` must contain at least one valid UUID string.")
+        }
+        let actorID = await identity.name
+        let memories = try await store.get(ids: uuids, requestingAgent: actorID)
+        
+        do {
+            try await activityStore.add(Activity(
+                actorKind: .mcp,
+                actorID: actorID,
+                operation: "memory_get",
+                resultCount: memories.count
+            ), memoryIDs: memories.map(\.id))
+        } catch {
+            Log.error(.mcp, "Failed to write activity row", [
+                "operation": "memory_get",
+                "error": String(describing: error),
+            ])
+        }
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let envelope = MCPGetResultEnvelope(
+            memories: memories.map(MCPGetMemory.init(memory:))
+        )
+        let data = try encoder.encode(envelope)
+        let jsonStr = String(data: data, encoding: .utf8) ?? "{\"memories\":[]}"
+        return .init(content: [.plainText(jsonStr)])
     }
 
     private func handleSearch(_ args: [String: Value]) async throws -> CallTool.Result {
@@ -352,8 +474,9 @@ struct ToolRegistry: Sendable {
             throw MCPError.invalidParams("`query` is required.")
         }
         let limit = Self.clampLimit(args["limit"]?.intValue)
+        let includeSuperseded = args["includeSuperseded"]?.boolValue ?? false
         let actorID = await identity.name
-        let memories = try await store.search(query: query, limit: limit, requestingAgent: actorID)
+        let memories = try await store.search(query: query, limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
         let blockedCount = try await store.blockedSearchCount(query: query, limit: limit, requestingAgent: actorID)
         do {
             try await activityStore.add(Activity(
@@ -383,8 +506,9 @@ struct ToolRegistry: Sendable {
 
     private func handleRecent(_ args: [String: Value]) async throws -> CallTool.Result {
         let limit = Self.clampLimit(args["limit"]?.intValue)
+        let includeSuperseded = args["includeSuperseded"]?.boolValue ?? false
         let actorID = await identity.name
-        let memories = try await store.recent(limit: limit, requestingAgent: actorID)
+        let memories = try await store.recent(limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
         let blockedCount = try await store.blockedRecentCount(limit: limit, requestingAgent: actorID)
         do {
             try await activityStore.add(Activity(
@@ -450,6 +574,15 @@ struct ToolRegistry: Sendable {
             title = existing.title
         }
 
+        let headline: String?
+        if let rawHeadline = args["headline"]?.stringValue {
+            headline = rawHeadline
+        } else if args["content"] != nil {
+            headline = nil
+        } else {
+            headline = existing.headline
+        }
+
         let type: MemoryType
         if let typeRaw = args["type"]?.stringValue {
             guard let parsed = MemoryType(rawValue: typeRaw) else {
@@ -472,12 +605,16 @@ struct ToolRegistry: Sendable {
             tags = existing.tags
         }
 
+        let supersedes = args["supersedes"]?.arrayValue?.compactMap { $0.stringValue }.compactMap { UUID(uuidString: $0) }
+
         let updated = try await store.update(
             id: id,
             content: content,
             type: type,
             title: title,
+            headline: headline,
             tags: tags,
+            supersedes: supersedes,
             actorKind: .mcp,
             actorID: actorID
         )
@@ -559,9 +696,10 @@ private struct MCPMemory: Encodable {
     let id: UUID
     let type: MemoryType
     let title: String?
-    let content: String
+    let headline: String?
     let tags: [String]
     let source: String?
+    let supersededBy: [UUID]?
     let createdAt: Date
     let updatedAt: Date
 
@@ -569,10 +707,25 @@ private struct MCPMemory: Encodable {
         id = memory.id
         type = memory.type
         title = memory.title
-        content = memory.content
+        headline = memory.headline
         tags = memory.tags
         source = memory.source
+        supersededBy = memory.supersededBy
         createdAt = memory.createdAt
         updatedAt = memory.updatedAt
+    }
+}
+
+private struct MCPGetResultEnvelope: Encodable {
+    let memories: [MCPGetMemory]
+}
+
+private struct MCPGetMemory: Encodable {
+    let id: UUID
+    let content: String
+
+    init(memory: Memory) {
+        id = memory.id
+        content = memory.content
     }
 }

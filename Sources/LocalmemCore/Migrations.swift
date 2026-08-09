@@ -208,6 +208,28 @@ enum Migrations {
             try db.execute(sql: "ALTER TABLE source_files ADD COLUMN kept_count INTEGER")
         }
 
+        migrator.registerMigration("v3_retrieval_and_supersession") { db in
+            try db.execute(sql: "ALTER TABLE memories ADD COLUMN headline TEXT")
+            try db.execute(sql: """
+                CREATE TABLE memory_supersessions (
+                    superseded_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                    superseding_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (superseded_id, superseding_id)
+                )
+                """)
+            try db.execute(sql: "CREATE INDEX idx_supersessions_superseded ON memory_supersessions(superseded_id)")
+            try db.execute(sql: "CREATE INDEX idx_supersessions_superseding ON memory_supersessions(superseding_id)")
+
+            try db.execute(sql: """
+                UPDATE memories SET headline = CASE
+                    WHEN INSTR(CAST(content AS TEXT), '.') > 0 AND INSTR(CAST(content AS TEXT), '.') <= 120
+                    THEN SUBSTR(CAST(content AS TEXT), 1, INSTR(CAST(content AS TEXT), '.'))
+                    ELSE SUBSTR(CAST(content AS TEXT), 1, 120)
+                END
+                """)
+        }
+
         return migrator
     }
 }

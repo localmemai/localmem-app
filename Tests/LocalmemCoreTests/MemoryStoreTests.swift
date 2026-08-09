@@ -20,7 +20,10 @@ struct MemoryStoreTests {
 
         let recent = try await store.recent(limit: 10)
         #expect(recent.count == 2)
-        #expect(recent.first?.content == "Second memory")
+        #expect(recent.first?.content == "") // Compact index has no content
+        
+        let full = try await store.get(id: recent.first!.id)
+        #expect(full?.content == "Second memory") // Full body fetched
     }
 
     @Test func searchMatchesAndExcludes() async throws {
@@ -32,7 +35,10 @@ struct MemoryStoreTests {
 
         let hits = try await store.search(query: "cat")
         #expect(hits.count == 1)
-        #expect(hits.first?.content.contains("cat") == true)
+        #expect(hits.first?.content == "") // Compact index has no content
+        
+        let full = try await store.get(id: hits.first!.id)
+        #expect(full?.content.contains("cat") == true) // Full body fetched
 
         let misses = try await store.search(query: "elephant")
         #expect(misses.isEmpty)

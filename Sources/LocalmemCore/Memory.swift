@@ -4,6 +4,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
     public let id: UUID
     public var type: MemoryType
     public var title: String?
+    public var headline: String?
     public var content: String
     public var tags: [String]
     public var excludedAgents: [String]
@@ -11,6 +12,8 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
     /// for the inline audit row created at the same time — nil for CLI writes
     /// that don't set `LOCALMEM_CLIENT_ID`, the MCP client name otherwise.
     public var source: String?
+    public var supersededBy: [UUID]?
+    public var supersedes: [UUID]?
     public let createdAt: Date
     public var updatedAt: Date
 
@@ -18,20 +21,26 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         id: UUID = UUID(),
         type: MemoryType,
         title: String? = nil,
+        headline: String? = nil,
         content: String,
         tags: [String] = [],
         excludedAgents: [String] = [],
         source: String? = nil,
+        supersededBy: [UUID]? = nil,
+        supersedes: [UUID]? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.type = type
         self.title = title
+        self.headline = headline
         self.content = content
         self.tags = tags
         self.excludedAgents = excludedAgents
         self.source = source
+        self.supersededBy = supersededBy
+        self.supersedes = supersedes
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

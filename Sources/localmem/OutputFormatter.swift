@@ -20,7 +20,7 @@ enum OutputFormatter {
             let created = tableDateFormatter.string(from: memory.createdAt)
             let type    = memory.type.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)
             let source  = (memory.source ?? "-").padding(toLength: 14, withPad: " ", startingAt: 0)
-            let title   = memory.title ?? String(memory.content.prefix(60))
+            let title   = memory.title ?? memory.headline ?? String(memory.content.prefix(60))
             print("\(shortId)  \(created)  \(type)  \(source)  \(title)")
         }
     }
@@ -32,8 +32,12 @@ enum OutputFormatter {
         print("created_at: \(memory.createdAt)")
         print("updated_at: \(memory.updatedAt)")
         if let title = memory.title { print("title:      \(title)") }
+        if let headline = memory.headline { print("headline:   \(headline)") }
         if !memory.tags.isEmpty { print("tags:       \(memory.tags.joined(separator: ", "))") }
         if !memory.excludedAgents.isEmpty { print("excluded:   \(memory.excludedAgents.joined(separator: ", "))") }
+        if let supersededBy = memory.supersededBy, !supersededBy.isEmpty {
+            print("superseded_by: \(supersededBy.map { $0.uuidString }.joined(separator: ", "))")
+        }
         print("---")
         print(memory.content)
     }

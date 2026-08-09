@@ -22,13 +22,13 @@ struct ToolRegistryTests {
 
     // MARK: - Descriptors
 
-    @Test("toolDescriptors lists exactly the four MCP tools")
+    @Test("toolDescriptors lists exactly the five MCP tools")
     func descriptorsCoverAllTools() throws {
         let (registry, tmp) = try makeRegistry()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let names = Set(registry.toolDescriptors.map(\.name))
-        #expect(names == ["memory_store", "memory_search", "memory_recent", "memory_update"])
+        #expect(names == ["memory_store", "memory_search", "memory_recent", "memory_update", "memory_get"])
     }
 
     // MARK: - Dispatch (call)
@@ -502,6 +502,36 @@ struct ToolRegistryTests {
         #expect(text.contains("visible with policy"))
         #expect(!text.contains("excludedAgents"))
         #expect(!text.contains("other-client"))
+    }
+
+    @Test("memory_get retrieves the full verbatim body for a compact result")
+    func callGetRetrievesVerbatimBody() async throws {
+        let (registry, tmp) = try makeRegistry()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Store a memory
+        let id = try await storeAndExtractID(
+            registry,
+            content: "This is the full secret content that should not be in search results.",
+            title: "Secret memory"
+        )
+
+        // 1. Search for it
+        let searchResult = try await registry.call(
+            name: "memory_search",
+            arguments: ["query": .string("secret")]
+        )
+        let searchText = searchResult.content.firstText
+        #expect(!searchText.contains("\"content\":")) // Content field should be omitted in search results
+        #expect(searchText.contains("Secret memory")) // Title/headline metadata should be there
+
+        // 2. Fetch using memory_get
+        let getResult = try await registry.call(
+            name: "memory_get",
+            arguments: ["ids": .array([.string(id.uuidString)])]
+        )
+        let getText = getResult.content.firstText
+        #expect(getText.contains("This is the full secret content that should not be in search results.")) // Body returned!
     }
 }
 

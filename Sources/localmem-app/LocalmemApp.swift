@@ -480,9 +480,21 @@ struct Pill: View {
 final class MemoryStoreViewModel {
     private(set) var memories: [Memory] = []
     private(set) var loadError: String?
+    private(set) var loadedMemories: [Memory.ID: Memory] = [:]
     private let store: MemoryStore
 
     init() throws { self.store = try MemoryStore() }
+
+    func loadFullMemoryIfNeeded(_ id: Memory.ID) async {
+        guard loadedMemories[id] == nil else { return }
+        do {
+            if let full = try await store.get(id: id) {
+                loadedMemories[id] = full
+            }
+        } catch {
+            Log.error(.store, "Failed to load full memory for \(id)", ["error": String(describing: error)])
+        }
+    }
 
     /// Single entry point for both initial load and live search. Empty query
     /// falls back to `recent` so the lists always have something to show.
@@ -1580,7 +1592,8 @@ struct MemoriesView: View {
     let onShowAuditTrail: (Memory) -> Void
 
     private var selected: Memory? {
-        vm?.memories.first { $0.id == selection }
+        guard let selection else { return nil }
+        return vm?.loadedMemories[selection] ?? vm?.memories.first { $0.id == selection }
     }
 
     var body: some View {
@@ -1605,6 +1618,11 @@ struct MemoriesView: View {
                 onShowAuditTrail: onShowAuditTrail
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .task(id: selection) {
+            if let selection {
+                await vm?.loadFullMemoryIfNeeded(selection)
+            }
         }
         // Screenshot/testing hook: `LOCALMEM_SELECT_MEMORY` (a title substring,
         // or "first") pre-selects a memory once the list has loaded.
@@ -1669,7 +1687,7 @@ struct MemoryListRow: View {
         HStack(spacing: 10) {
             SourceIcon(source: memory.source, size: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(memory.title ?? String(memory.content.prefix(40)))
+                Text(memory.title ?? memory.headline ?? String(memory.content.prefix(40)))
                     .lineLimit(1)
                 Text("\(memory.type.rawValue.capitalized) · \(memory.createdAt, format: .relative(presentation: .named))")
                     .font(.caption)
@@ -1700,13 +1718,64 @@ struct MemoryDetailPane: View {
 
                         MetadataStrip(memory: memory)
 
+                        if let supersededBy = memory.supersededBy, !supersededBy.isEmpty {
+                            HStack(spacing: 10) {
+                                Image(systemName: "arrow.triangle.merge")
+                                    .font(.headline)
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Superseded Memory")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.orange)
+                                    Text("Replaced by a newer version.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        if let supersedes = memory.supersedes, !supersedes.isEmpty {
+                            HStack(spacing: 10) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.headline)
+                                    .foregroundStyle(.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Superseding Memory")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.green)
+                                    Text("This entry replaces an older version.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                        }
+
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Content")
                                 .font(.headline)
-                            Text(memory.content)
-                                .font(.body)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
+                            if vm?.loadedMemories[memory.id] == nil {
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading full memory body...")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 12)
+                            } else {
+                                Text(memory.content)
+                                    .font(.body)
+                                    .lineSpacing(3)
+                                    .textSelection(.enabled)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
@@ -1736,6 +1805,7 @@ struct MemoryDetailPane: View {
                 // Actions pinned to the bottom of the pane.
                 HStack(spacing: 10) {
                     Button("Edit") { onEdit(memory) }
+                        .disabled(vm?.loadedMemories[memory.id] == nil)
                     Button("Delete", role: .destructive) {
                         showingDeleteConfirmation = true
                     }
