@@ -142,12 +142,17 @@ public final class SourceStore: Sendable {
 
         let parent = (path as NSString).deletingLastPathComponent
         guard !parent.isEmpty, parent != "/" else { return inbox }
-        let name = Migrations.folderName(forDirectory: parent)
 
+        // Match on the directory path, not the display name. Matching by name
+        // means renaming a folder splits its next import into a fresh
+        // (not sensitive) folder, and two unrelated directories that happen to
+        // share a leaf name — `.../2026/` under two different sources — collapse
+        // into one. `project_root` is the folder's canonical path for both
+        // project and source kinds, and is already uniquely indexed.
         if let existing = try String.fetchOne(
             db,
-            sql: "SELECT id FROM folders WHERE kind = 'source' AND name = ? LIMIT 1",
-            arguments: [name]
+            sql: "SELECT id FROM folders WHERE project_root = ? LIMIT 1",
+            arguments: [parent]
         ), let id = UUID(uuidString: existing) {
             return id
         }
@@ -157,9 +162,9 @@ public final class SourceStore: Sendable {
         try db.execute(
             sql: """
                 INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
-                VALUES (?, ?, 'source', NULL, 0, ?, ?)
+                VALUES (?, ?, 'source', ?, 0, ?, ?)
                 """,
-            arguments: [newID.uuidString, name, now, now]
+            arguments: [newID.uuidString, Migrations.folderName(forDirectory: parent), parent, now, now]
         )
         return newID
     }

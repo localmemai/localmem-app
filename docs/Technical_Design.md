@@ -201,6 +201,31 @@ Localmem should not require a Localmem-operated server to access user plaintext.
 It should also provide better visibility and tighter access control than broad
 cloud connectors that expose an entire account or drive.
 
+### Network posture
+
+The product promise is about *plaintext*, not about a literal zero-packet app —
+but the difference is only credible if the exceptions are enumerated. This is the
+complete list of outbound connections the app, CLI, and MCP server make:
+
+| Connection | Made by | Sends | Cadence |
+|---|---|---|---|
+| Update check — `api.github.com/repos/localmemai/localmem-app/releases/latest` | App only | Nothing but the HTTPS request itself (GitHub sees IP + user agent) | ≤ once per 24h, on launch |
+
+That's the whole table. No memory content, no counts, no folder or agent names,
+no identifiers of any kind leave the machine, and the CLI and MCP server make no
+network calls at all. **Any new entry belongs in this table before it ships** —
+if a change can't be written as a row here, it's a change to the product promise
+and needs to be argued as one.
+
+A version check is a question, not a report: it transmits nothing about the user
+that isn't inherent to opening a TCP connection, and the IP it discloses to
+GitHub is the same one that downloaded the DMG. This is the settled norm for
+privacy-positioned apps rather than a compromise unique to us — Obsidian checks
+by default and documents the off switch in Settings → About; Cryptomator's
+privacy policy discloses that its check sends OS version, app version, time, and
+IP; Signal auto-updates with no opt-out at all. Users who want zero connections
+have a real answer: the toggle (see §12), and the CLI, which never checks.
+
 ### Vault encryption (planned)
 
 - A vault key is generated on-device with CryptoKit; memory content is encrypted
@@ -642,6 +667,29 @@ second), total memory count, and a `▴` that opens a popover with daemon health
 DB path/size, connected clients, the last 10 activity rows, and
 Restart-daemon / Open-logs actions.
 
+### Version & update cell (footer)
+
+The shipped footer is a 52pt bar of five equal `StatusSegment` cells
+(`LocalmemApp.swift`). The leftmost cell showed vault lock state — `Locked` /
+`Unlocked` with `Touch ID required` / `Touch ID on` — which was the bar's weakest
+cell twice over: the top toolbar already carries the lock *action*, and when the
+vault is locked a full-window `LockScreen` covers the content area, so the cell
+announced "Locked" beside a floor-to-ceiling lock screen. Nothing was learnable
+there. It becomes the version and update cell.
+
+Same `StatusSegment` shape, so no other cell moves. Three states:
+
+| State | Glyph | Title | Detail |
+|---|---|---|---|
+| Idle | `checkmark.seal`, secondary | `Localmem 1.0.1` | `Up to date` |
+| Checking | `checkmark.seal`, secondary | `Localmem 1.0.1` | `Checking…` |
+| Update available | `arrow.down.circle.fill`, accent | `Update available` | `1.1.0 — Download` |
+
+Only the third state is clickable. Bottom-left is where users already look for a
+version string, and it makes bug reports legible without asking anyone to find an
+About panel. Lock state is not replaced by anything: it was never information the
+user lacked.
+
 ### Settings
 
 Tabs: **General** (launch at login, menu bar, theme, re-run setup), **Access
@@ -705,7 +753,9 @@ v1 ships a single channel — the **notarized DMG** — and defers the CLI chann
   administrator prompt via osascript when `/usr/local/bin` isn't user-writable).
 - **Updates:** **re-download** — the user drags a new DMG over the old app.
   Because the app stays at `/Applications/Localmem.app`, the `localmem-mcp` path
-  baked into client configs is unchanged, so registrations survive.
+  baked into client configs is unchanged, so registrations survive. The app
+  surfaces its version and tells the user when a newer one exists — see
+  "Version display & update checking" below.
 - **Deferred:** Homebrew formula + curl script (CLI-only channels), a Homebrew
   Cask, a ZIP artifact, and Sparkle auto-updates — see the target shape below.
 
@@ -714,6 +764,69 @@ v1 ships a single channel — the **notarized DMG** — and defers the CLI chann
 and client configs in each client's own file. An install or update only ever
 replaces the binaries under `Localmem.app`, so memories and configs are preserved
 by construction.
+
+### Version display & update checking
+
+**Where the version comes from.** `LocalmemVersion.current`
+([`Sources/LocalmemCore/LocalmemVersion.swift`](../Sources/LocalmemCore/LocalmemVersion.swift)),
+not `CFBundleShortVersionString`. The release workflow already fails the build
+when the constant doesn't equal the `vX.Y.Z` tag, so the constant *is* the
+released version — and unlike the Info.plist it exists in `swift run` dev builds,
+which have no bundle at all. One string, already CI-enforced, already shared by
+`localmem --version` and the MCP `initialize` response.
+
+**The check (phase A — no new dependencies).** A `GET` against
+`api.github.com/repos/localmemai/localmem-app/releases/latest`, reading
+`tag_name`. Rules:
+
+- **Cadence:** at most once per 24h, on launch. `lastCheckedAt` and
+  `latestSeenVersion` persist in `UserDefaults`, so relaunching in a loop doesn't
+  re-check and the footer can render the last known answer instantly.
+- **Comparison is component-wise semver**, never string compare — `1.10.0` is
+  newer than `1.9.0` and a lexical compare gets that backwards.
+- **Failure is silent.** Offline, rate-limited, DNS-poisoned, GitHub down: the
+  cell keeps showing the current version. An update check is not something the
+  user asked for, so it never earns an error state in the chrome.
+- **Unauthenticated rate limit** (60/hr/IP) is irrelevant at ≤1 request/day.
+- **The click opens the releases page** in the browser. Phase A discovers
+  updates; it does not install them. The user still drags the DMG over.
+- **Toggle** in Settings → General, on by default, matching Obsidian. The README
+  and the privacy copy state in one sentence what the check sends (§5).
+
+**Phase B — Sparkle, for true in-place updates.** Three properties already make
+the app safe to swap in place, and they were designed in for this: the bundle
+lives at a fixed `/Applications/Localmem.app` so the `localmem-mcp` path baked
+into client configs survives; user data lives outside the bundle; and builds are
+Developer ID–signed, notarized, and stapled, which Sparkle requires. Sparkle 2
+can update straight from the **DMG already published**, so no ZIP artifact is
+needed. What phase B costs:
+
+1. An **EdDSA key pair** (`generate_keys`); private half into repo secrets,
+   public half into `SUPublicEDKey`.
+2. **`appcast.xml` served from [`web/`](../web)** at `localmem.ai/appcast.xml` —
+   the Vercel deployment already there — plus `SUFeedURL` in the Info.plist.
+3. A **`sign_update` step** in [`release.yml`](../.github/workflows/release.yml)
+   that signs the DMG and writes the signature into the appcast.
+4. **`Sparkle.framework` folded into the inside-out signing** in
+   [`build-dmg.sh`](../packaging/build-dmg.sh) — the only genuinely fiddly part,
+   since the current script signs a flat list of binaries with no
+   `Contents/Frameworks` to walk.
+
+**Do not set `SUEnableAutomaticChecks`.** Left unset, Sparkle asks the user's
+permission on *second* launch (first launch stays clean) and honors the answer.
+That prompt is Sparkle's own default, it costs one dialog, and "we asked" is a
+materially stronger claim for this product than "we defaulted it on."
+
+**Known wrinkle:** an AI client may be running `localmem-mcp` out of the old
+bundle when the swap happens. Replacing a bundle under a running process is safe
+on macOS — the open inode survives — and the next spawn picks up the new binary,
+so a long-lived agent session keeps the old MCP server until it restarts. No data
+risk; worth knowing when triaging "I updated but the version didn't change."
+
+**Phases are independently shippable.** The footer states don't change when
+Sparkle lands — `Download` becomes `Install and Relaunch`. Landing phase B on its
+own tag means verifying the signed-notarized-appcast path without simultaneously
+debugging new UI.
 
 ### Target shape (later releases)
 
@@ -767,8 +880,10 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
   ranking); append-only supersession edges; two-pass extract → verify on the
   write path (§10); folders with per-folder agent visibility (§8); graceful
   degradation on older macOS.
-- **next** — vault-level dedup; folder merge/rename ergonomics as auto-created
-  project folders accumulate; Homebrew channel and Sparkle updates.
+- **next** — version + update-available cell in the footer and the once-daily
+  release check (§12 phase A); vault-level dedup; folder merge/rename ergonomics
+  as auto-created project folders accumulate; Homebrew channel and Sparkle
+  in-place updates (§12 phase B).
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
@@ -793,5 +908,11 @@ the constraint, retrieval is.
 4. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
    forever)?
 5. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
-   DMG vs. ZIP; Homebrew cask yes/no; commit to Sparkle for v1 or ship
-   re-download-only; where release artifacts live (GitHub Releases vs. own CDN).
+   Homebrew cask yes/no; where release artifacts live (GitHub Releases vs. own
+   CDN). *Settled:* DMG only (Sparkle 2 updates from it, so no ZIP), and Sparkle
+   is committed as phase B rather than skipped — see §12.
+6. **Update-feed host** — phase A checks GitHub's releases API, which keeps user
+   IPs with GitHub. A `version.json` (or the Sparkle appcast) on `localmem.ai`
+   would allow staged rollouts and a kill switch, but makes *us* the party seeing
+   the IPs. Phase B forces the question, since the appcast must be hosted
+   somewhere.

@@ -491,6 +491,12 @@ final class MemoryStoreViewModel {
     /// still lists its contents.
     private(set) var folderChildren: [UUID: [Memory]] = [:]
 
+    /// The query the list currently reflects. Mutations re-run *this* rather
+    /// than resetting to "", which would repopulate the list with unrelated
+    /// recent memories while the search field and the tree still say a filter
+    /// is active.
+    private(set) var activeQuery = ""
+
     func loadFoldersAndAgents() async {
         do {
             folders = try await store.listFolders()
@@ -536,6 +542,7 @@ final class MemoryStoreViewModel {
     /// falls back to `recent` so the lists always have something to show.
     func search(_ query: String, limit: Int = 50) async {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
+        activeQuery = query
         do {
             let result = trimmed.isEmpty
                 ? try await store.recent(limit: limit)
@@ -569,7 +576,7 @@ final class MemoryStoreViewModel {
             actorKind: .cli,
             actorID: "user"
         )
-        await search("")
+        await search(activeQuery)
         return memory.id
     }
 
@@ -595,14 +602,14 @@ final class MemoryStoreViewModel {
             actorKind: .cli,
             actorID: "user"
         )
-        await search("")
+        await search(activeQuery)
         return updated
     }
 
     func delete(_ id: Memory.ID) async throws {
         _ = try await store.delete(id: id, actorKind: .cli, actorID: "user")
         await refreshFolderChildren()
-        await search("")
+        await search(activeQuery)
     }
 
     /// Serializes the entire vault into a portable archive blob for Export.
@@ -620,27 +627,27 @@ final class MemoryStoreViewModel {
         _ = try await store.updateFolder(id: id, name: name, isSensitive: isSensitive)
         await refreshFolderChildren()
         await loadFoldersAndAgents()
-        await search("")
+        await search(activeQuery)
     }
 
     func deleteFolder(id: UUID) async throws {
         try await store.deleteFolder(id: id)
         await refreshFolderChildren()
         await loadFoldersAndAgents()
-        await search("")
+        await search(activeQuery)
     }
 
     func mergeFolders(ids: [UUID], intoName: String) async throws {
         _ = try await store.mergeFolders(ids: ids, intoName: intoName)
         await refreshFolderChildren()
         await loadFoldersAndAgents()
-        await search("")
+        await search(activeQuery)
     }
 
     func setAgentStatus(id: String, status: Agent.Status) async throws {
         try await store.setAgentStatus(id: id, status: status)
         await loadFoldersAndAgents()
-        await search("")
+        await search(activeQuery)
     }
 
     /// Parses an exported archive and merges it into the store (skipping ids
@@ -649,7 +656,7 @@ final class MemoryStoreViewModel {
     func importArchive(_ data: Data) async throws -> ImportSummary {
         let memories = try MemoryArchive.decode(data)
         let summary = try await store.importMemories(memories, actorKind: .cli, actorID: "user")
-        await search("")
+        await search(activeQuery)
         return summary
     }
 }
@@ -2722,14 +2729,11 @@ struct MemoryEditorView: View {
         self.vm = vm
         self.onSaved = onSaved
         
-        let folder: UUID
-        if let initial = initialFolderID {
-            folder = initial
-        } else if let inbox = vm.folders.first(where: { $0.name.lowercased() == "inbox" }) {
-            folder = inbox.id
-        } else {
-            folder = UUID()
-        }
+        // Inbox is a fixed sentinel, so fall back to it directly rather than
+        // hunting for it by name — before `vm.folders` has loaded, a name lookup
+        // finds nothing and a random UUID would fail the folder foreign key on
+        // save with a raw SQL error.
+        let folder = initialFolderID ?? MemoryStore.inboxFolderID
         
         _folderID = State(initialValue: folder)
         

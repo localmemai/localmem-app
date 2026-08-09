@@ -568,6 +568,98 @@ struct MemoryStoreTests {
         #expect(other.id != a.id)
     }
 
+    // MARK: - Regressions
+
+    @Test func mergingIntoTheNameOfASourceKeepsThatFolder() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let keep = try await store.createFolder(name: "Archive", kind: .manual,
+                                                projectRoot: nil, isSensitive: false)
+        let other = try await store.createFolder(name: "Old", kind: .manual,
+                                                 projectRoot: nil, isSensitive: false)
+        let a = try await store.add(content: "in archive", type: .note,
+                                    folderID: keep.id, actorKind: .cli, actorID: "user")
+        let b = try await store.add(content: "in old", type: .note,
+                                    folderID: other.id, actorKind: .cli, actorID: "user")
+
+        // Naming the destination after one of the sources previously deleted it,
+        // dumping everything into Inbox.
+        let dest = try await store.mergeFolders(ids: [keep.id, other.id], intoName: "Archive")
+        #expect(dest.id == keep.id)
+
+        let folders = try await store.listFolders()
+        #expect(folders.contains { $0.id == keep.id })
+        #expect(!folders.contains { $0.id == other.id })
+        #expect(try await store.get(id: a.id)?.folderID == keep.id)
+        #expect(try await store.get(id: b.id)?.folderID == keep.id)
+    }
+
+    @Test func mergingASensitiveFolderKeepsTheResultSensitive() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        let open = try await store.createFolder(name: "Notes", kind: .manual,
+                                                projectRoot: nil, isSensitive: false)
+
+        // Merging must never widen who can read a memory.
+        let dest = try await store.mergeFolders(ids: [secret.id, open.id], intoName: "Notes")
+        #expect(dest.isSensitive)
+        let refreshed = try #require(try await store.listFolders().first { $0.id == dest.id })
+        #expect(refreshed.isSensitive)
+    }
+
+    @Test func importingAnArchiveWithAnUnknownFolderFilesItInInbox() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Archives carry memories but not folders, so the id names a row that
+        // does not exist here. Writing it verbatim aborted the whole import on
+        // the folder foreign key.
+        let incoming = Memory(type: .fact, content: "from another machine",
+                              folderID: UUID(), source: "other-machine")
+        let summary = try await store.importMemories([incoming], actorKind: .cli, actorID: "user")
+        #expect(summary.imported == 1)
+        #expect(try await store.get(id: incoming.id)?.folderID == Self.inboxID)
+    }
+
+    @Test func withheldCountsOnlyCoverTheReturnedWindow() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        for i in 0..<10 {
+            _ = try await store.add(content: "secret alpha \(i)", type: .fact,
+                                    folderID: secret.id, actorKind: .cli, actorID: "user")
+        }
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        // A full-table count reported every sensitive memory in the vault,
+        // regardless of how few rows the caller asked for.
+        let recent = try await store.recent(limit: 3, requestingAgent: "codex")
+        #expect(recent.withheld <= 3)
+        let hits = try await store.search(query: "alpha", limit: 3, requestingAgent: "codex")
+        #expect(hits.withheld <= 3)
+    }
+
+    @Test func accessChangesAreRecordedInTheAuditLog() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activity = ActivityStore(database: try LocalmemDatabase(url: url))
+
+        let folder = try await store.createFolder(name: "Docs", kind: .manual,
+                                                  projectRoot: nil, isSensitive: false)
+        _ = try await store.updateFolder(id: folder.id, name: "Docs", isSensitive: true)
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        let ops = Set(try await activity.recent(limit: 50).map(\.operation))
+        #expect(ops.contains("folder_restrict"))
+        #expect(ops.contains("agent_restrict"))
+    }
+
     // MARK: - Supersession
 
     @Test func addSupersedesHidesOldAndDeRanksWhenIncluded() async throws {

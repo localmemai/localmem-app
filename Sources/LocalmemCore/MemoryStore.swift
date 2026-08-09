@@ -4,6 +4,12 @@ import GRDB
 public actor MemoryStore {
     private let database: LocalmemDatabase
 
+    /// The default folder's id is a fixed sentinel, not a generated UUID, so it
+    /// can serve as a SQL `DEFAULT` on `memories.folder_id` — a binary that
+    /// predates folders still writes valid rows instead of violating NOT NULL.
+    public static let inboxFolderIDString = "00000000-0000-0000-0000-000000000000"
+    public static let inboxFolderID = UUID(uuidString: inboxFolderIDString)!
+
     /// Opens the store at the default user-level database path
     /// (`~/Library/Application Support/Localmem/localmem.sqlite3`).
     /// This is the only init exposed to consumers — production code never
@@ -35,7 +41,7 @@ public actor MemoryStore {
         actorKind: ActorKind,
         actorID: String? = nil
     ) async throws -> Memory {
-        let resolvedFolderID = folderID ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        let resolvedFolderID = folderID ?? Self.inboxFolderID
         let resolvedHeadline = headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? headline
             : Self.generateHeadline(from: content)
@@ -310,18 +316,29 @@ public actor MemoryStore {
                 ? ""
                 : "AND NOT EXISTS (SELECT 1 FROM memory_supersessions WHERE superseded_id = memories.id)"
             
-            // Total matches without agent status filter
-            let totalQuery = """
-                SELECT memories.id, folders.sensitive FROM memories
-                JOIN folders ON memories.folder_id = folders.id
-                WHERE 1=1
-                \(supersessionFilter)
-                """
-            let allMatches = try Row.fetchAll(db, sql: totalQuery)
-            let totalWithheld = allMatches.filter { row in
-                let isSensitive: Int = row["sensitive"] ?? 0
-                return isSensitive == 1 && statusVal == "non_sensitive_only"
-            }.count
+            // How many of the rows this caller *would* have seen were held
+            // back. Scoped to the same top-`limit` window the query returns —
+            // counting every sensitive row in the vault reports withholding
+            // that never happened (`recent(limit: 3)` claiming 30 withheld) and
+            // scans the whole table on every call.
+            var totalWithheld = 0
+            if statusVal == "non_sensitive_only" {
+                totalWithheld = try Int.fetchOne(
+                    db,
+                    sql: """
+                        SELECT COUNT(*) FROM (
+                            SELECT folders.sensitive AS sensitive FROM memories
+                            JOIN folders ON memories.folder_id = folders.id
+                            WHERE 1=1
+                            \(supersessionFilter)
+                            ORDER BY memories.created_at DESC, memories.rowid DESC
+                            LIMIT ?
+                        ) candidates
+                        WHERE candidates.sensitive = 1
+                        """,
+                    arguments: [clampedLimit]
+                ) ?? 0
+            }
             
             // Now execute the actual limited query with status filter
             let sql = """
@@ -487,19 +504,27 @@ public actor MemoryStore {
                 ? ""
                 : "AND NOT EXISTS (SELECT 1 FROM memory_supersessions WHERE superseded_id = memories_fts.memory_id)"
             
-            // Total matches without agent status filter
-            let totalQuery = """
-                SELECT memories_fts.memory_id, folders.sensitive FROM memories_fts
-                JOIN memories ON memories_fts.memory_id = memories.id
-                JOIN folders ON memories.folder_id = folders.id
-                WHERE memories_fts MATCH ?
-                \(supersessionFilter)
-                """
-            let allMatches = try Row.fetchAll(db, sql: totalQuery, arguments: [fts])
-            let totalWithheld = allMatches.filter { row in
-                let isSensitive: Int = row["sensitive"] ?? 0
-                return isSensitive == 1 && statusVal == "non_sensitive_only"
-            }.count
+            // Scoped to the same top-`limit` window as the query below, and
+            // skipped entirely for unrestricted callers — see `recent`.
+            var totalWithheld = 0
+            if statusVal == "non_sensitive_only" {
+                totalWithheld = try Int.fetchOne(
+                    db,
+                    sql: """
+                        SELECT COUNT(*) FROM (
+                            SELECT folders.sensitive AS sensitive FROM memories_fts
+                            JOIN memories ON memories_fts.memory_id = memories.id
+                            JOIN folders ON memories.folder_id = folders.id
+                            WHERE memories_fts MATCH ?
+                            \(supersessionFilter)
+                            ORDER BY rank
+                            LIMIT ?
+                        ) candidates
+                        WHERE candidates.sensitive = 1
+                        """,
+                    arguments: [fts, clampedLimit]
+                ) ?? 0
+            }
             
             // Now run actual FTS search with ranking and limit
             let sql = """
@@ -583,6 +608,19 @@ public actor MemoryStore {
         let headline = memory.headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? memory.headline
             : Self.generateHeadline(from: memory.content)
+
+        // Archives carry memories but not folders, so a `folder_id` from
+        // another vault names a row that does not exist here. `folder_id` is a
+        // foreign key, so writing it verbatim aborts the whole import. File
+        // those in Inbox — the memory matters, its folder on some other machine
+        // does not, and Inbox is never sensitive so nothing is hidden by the
+        // fallback.
+        let folderExists = try Bool.fetchOne(
+            db,
+            sql: "SELECT EXISTS (SELECT 1 FROM folders WHERE id = ?)",
+            arguments: [memory.folderID.uuidString]
+        ) ?? false
+        let folderID = folderExists ? memory.folderID.uuidString : Self.inboxFolderIDString
         try db.execute(
             sql: """
                 INSERT OR IGNORE INTO memories (id, type, title, headline, content, folder_id, session_id, source, created_at, updated_at)
@@ -594,7 +632,7 @@ public actor MemoryStore {
                 memory.title,
                 headline,
                 Data(memory.content.utf8),
-                memory.folderID.uuidString,
+                folderID,
                 memory.sessionID,
                 memory.source,
                 DateFormat.iso8601.string(from: memory.createdAt),
@@ -871,6 +909,7 @@ enum DateFormat {
 
 public enum FolderError: Error {
     case inboxImmutable
+    case invalidName
 }
 
 extension Folder {
@@ -926,10 +965,25 @@ extension MemoryStore {
         return try await database.write { db in
             let now = Date()
             let nowStr = DateFormat.iso8601.string(from: now)
+            // A change to who can read a folder is exactly the kind of event the
+            // audit log exists for — the per-memory methods this replaced logged
+            // access_grant/access_revoke, and dropping that would leave
+            // permission changes invisible.
+            let wasSensitive = try Bool.fetchOne(
+                db, sql: "SELECT sensitive FROM folders WHERE id = ?", arguments: [id.uuidString]
+            ) ?? false
             try db.execute(
                 sql: "UPDATE folders SET name = ?, sensitive = ?, updated_at = ? WHERE id = ?",
                 arguments: [name, isSensitive ? 1 : 0, nowStr, id.uuidString]
             )
+            if wasSensitive != isSensitive {
+                try ActivityStore.add(Activity(
+                    actorKind: .cli,
+                    actorID: "user",
+                    operation: isSensitive ? "folder_restrict" : "folder_open",
+                    query: name
+                ), in: db)
+            }
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM folders WHERE id = ?", arguments: [id.uuidString]) else {
                 throw MemoryStoreError.notFound
             }
@@ -942,14 +996,25 @@ extension MemoryStore {
             throw FolderError.inboxImmutable
         }
         try await database.write { db in
+            let name = try String.fetchOne(
+                db, sql: "SELECT name FROM folders WHERE id = ?", arguments: [id.uuidString]
+            ) ?? ""
             try db.execute(
-                sql: "UPDATE memories SET folder_id = '00000000-0000-0000-0000-000000000000' WHERE folder_id = ?",
-                arguments: [id.uuidString]
+                sql: "UPDATE memories SET folder_id = ? WHERE folder_id = ?",
+                arguments: [Self.inboxFolderIDString, id.uuidString]
             )
+            let moved = db.changesCount
             try db.execute(
                 sql: "DELETE FROM folders WHERE id = ?",
                 arguments: [id.uuidString]
             )
+            try ActivityStore.add(Activity(
+                actorKind: .cli,
+                actorID: "user",
+                operation: "folder_delete",
+                query: name,
+                resultCount: moved
+            ), in: db)
         }
     }
     
@@ -960,49 +1025,89 @@ extension MemoryStore {
         }
     }
     
+    /// Merge `ids` into a folder named `intoName`, creating it if absent.
+    ///
+    /// The destination is excluded from the set being deleted. Naming the
+    /// destination after one of the sources — the obvious thing to do — would
+    /// otherwise delete the folder the memories were just moved into, dumping
+    /// them in Inbox and dropping the destination's sensitivity with it.
+    ///
+    /// Sensitivity is preserved conservatively: if any source folder is
+    /// sensitive, so is the result. Merging must never widen who can read a
+    /// memory.
     public func mergeFolders(ids: [UUID], intoName: String) async throws -> Folder {
-        let idStrings = ids.map { $0.uuidString }.filter { $0 != "00000000-0000-0000-0000-000000000000" }
-        guard !idStrings.isEmpty else {
-            throw FolderError.inboxImmutable
-        }
+        let name = intoName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw FolderError.invalidName }
+
+        let requested = ids.map { $0.uuidString }.filter { $0 != Self.inboxFolderIDString }
+        guard !requested.isEmpty else { throw FolderError.inboxImmutable }
+
         return try await database.write { db in
-            let now = Date()
-            let nowStr = DateFormat.iso8601.string(from: now)
-            
-            var targetFolder: Folder? = nil
-            if let targetRow = try Row.fetchOne(db, sql: "SELECT * FROM folders WHERE name = ?", arguments: [intoName]) {
-                targetFolder = try Folder(row: targetRow)
+            let nowStr = DateFormat.iso8601.string(from: Date())
+
+            // Any source marked sensitive makes the destination sensitive.
+            let placeholdersAll = requested.map { _ in "?" }.joined(separator: ",")
+            let anySensitive = (try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM folders WHERE sensitive = 1 AND id IN (\(placeholdersAll))",
+                arguments: StatementArguments(requested)
+            ) ?? 0) > 0
+
+            let dest: Folder
+            if let row = try Row.fetchOne(
+                db, sql: "SELECT * FROM folders WHERE name = ? LIMIT 1", arguments: [name]
+            ) {
+                var existing = try Folder(row: row)
+                if anySensitive && !existing.isSensitive {
+                    try db.execute(
+                        sql: "UPDATE folders SET sensitive = 1, updated_at = ? WHERE id = ?",
+                        arguments: [nowStr, existing.id.uuidString]
+                    )
+                    // Reflect the write in the returned value — callers use it to
+                    // update the UI, and a stale `false` would show the merged
+                    // folder as open while the database has it restricted.
+                    existing.isSensitive = true
+                }
+                dest = existing
             } else {
-                let newFolder = Folder(name: intoName, kind: .manual)
+                let created = Folder(name: name, kind: .manual, isSensitive: anySensitive)
                 try db.execute(
                     sql: """
                         INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
-                        VALUES (?, ?, ?, NULL, 0, ?, ?)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?)
                         """,
-                    arguments: [newFolder.id.uuidString, newFolder.name, newFolder.kind.rawValue, nowStr, nowStr]
+                    arguments: [created.id.uuidString, created.name, created.kind.rawValue,
+                                created.isSensitive ? 1 : 0, nowStr, nowStr]
                 )
-                targetFolder = newFolder
+                dest = created
             }
-            
-            guard let dest = targetFolder else {
-                throw MemoryStoreError.notFound
-            }
-            
-            let placeholders = idStrings.map { _ in "?" }.joined(separator: ",")
+
+            // Never delete the destination, even when it was named as a source.
+            let sources = requested.filter { $0 != dest.id.uuidString }
+            guard !sources.isEmpty else { return dest }
+
+            let placeholders = sources.map { _ in "?" }.joined(separator: ",")
             try db.execute(
                 sql: "UPDATE memories SET folder_id = ? WHERE folder_id IN (\(placeholders))",
-                arguments: StatementArguments([dest.id.uuidString] + idStrings)
+                arguments: StatementArguments([dest.id.uuidString] + sources)
             )
-            
             try db.execute(
                 sql: "DELETE FROM folders WHERE id IN (\(placeholders))",
-                arguments: StatementArguments(idStrings)
+                arguments: StatementArguments(sources)
             )
-            
+
+            try ActivityStore.add(Activity(
+                actorKind: .cli,
+                actorID: "user",
+                operation: "folder_merge",
+                query: dest.name,
+                resultCount: sources.count
+            ), in: db)
+
             return dest
         }
     }
-    
+
     public func getFolderCounts() async throws -> [UUID: Int] {
         try await database.read { db in
             let rows = try Row.fetchAll(db, sql: "SELECT folder_id, COUNT(*) as c FROM memories GROUP BY folder_id")
@@ -1066,10 +1171,23 @@ extension MemoryStore {
         try await database.write { db in
             let now = Date()
             let nowStr = DateFormat.iso8601.string(from: now)
+            let previous = try String.fetchOne(
+                db, sql: "SELECT status FROM agents WHERE id = ?", arguments: [id]
+            ) ?? Agent.Status.all.rawValue
             try db.execute(
                 sql: "INSERT INTO agents (id, status, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = ?, updated_at = ?",
                 arguments: [id, status.rawValue, nowStr, nowStr, status.rawValue, nowStr]
             )
+            // Narrowing or widening an agent's reach is an access change and
+            // belongs in the audit log next to the folder events.
+            if previous != status.rawValue {
+                try ActivityStore.add(Activity(
+                    actorKind: .cli,
+                    actorID: "user",
+                    operation: status == .nonSensitiveOnly ? "agent_restrict" : "agent_unrestrict",
+                    query: id
+                ), in: db)
+            }
         }
     }
     

@@ -433,7 +433,7 @@ struct ToolRegistry: Sendable {
         let resolvedProjectRoot: String?
         if let root = args["project_root"]?.stringValue, !root.isEmpty {
             resolvedProjectRoot = root
-        } else if let parentCWD = ProcessUtility.getParentCWD(),
+        } else if let parentCWD = await ProcessUtility.getParentCWD(),
                   let gitRoot = ProcessUtility.findGitRoot(from: parentCWD) {
             resolvedProjectRoot = gitRoot
         } else {

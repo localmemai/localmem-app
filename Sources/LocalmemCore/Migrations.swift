@@ -308,12 +308,15 @@ enum Migrations {
                 } else {
                     let newID = UUID().uuidString
                     let folderName = Self.folderName(forDirectory: parentDir)
+                    // Stamp the directory as the folder's canonical path so a
+                    // later import of a sibling file resolves to this folder
+                    // even if the user has renamed it.
                     try db.execute(
                         sql: """
                             INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
-                            VALUES (?, ?, ?, NULL, 0, ?, ?)
+                            VALUES (?, ?, ?, ?, 0, ?, ?)
                             """,
-                        arguments: [newID, folderName, "source", nowStr, nowStr]
+                        arguments: [newID, folderName, "source", parentDir, nowStr, nowStr]
                     )
                     folderPathsToIDs[parentDir] = newID
                     folderID = newID
@@ -327,6 +330,45 @@ enum Migrations {
             
             // 8. Drop memory_agent_exclusions
             try db.execute(sql: "DROP TABLE memory_agent_exclusions")
+        }
+
+        // Source folders are matched by their directory path, not their display
+        // name — renaming one must not split its next import into a fresh
+        // folder, and two directories sharing a leaf name must not collapse.
+        // Databases that already ran v4 have `project_root` NULL on their source
+        // folders, so recover each folder's directory from the sources its
+        // memories came from.
+        migrator.registerMigration("v5_source_folder_paths") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT m.folder_id AS folder_id, s.path AS path
+                FROM memories m
+                JOIN folders f ON f.id = m.folder_id
+                JOIN source_memories sm ON sm.memory_id = m.id
+                JOIN sources s ON s.id = sm.source_id
+                WHERE f.kind = 'source' AND f.project_root IS NULL
+                """)
+
+            var seen: Set<String> = []
+            for row in rows {
+                guard let folderID: String = row["folder_id"],
+                      let path: String = row["path"],
+                      !seen.contains(folderID) else { continue }
+                let parent = (path as NSString).deletingLastPathComponent
+                guard !parent.isEmpty, parent != "/" else { continue }
+                // The unique index on project_root means a directory already
+                // claimed by another folder must not be written twice.
+                let taken = try Bool.fetchOne(
+                    db,
+                    sql: "SELECT EXISTS (SELECT 1 FROM folders WHERE project_root = ?)",
+                    arguments: [parent]
+                ) ?? false
+                guard !taken else { continue }
+                try db.execute(
+                    sql: "UPDATE folders SET project_root = ? WHERE id = ?",
+                    arguments: [parent, folderID]
+                )
+                seen.insert(folderID)
+            }
         }
 
         return migrator

@@ -16,7 +16,7 @@ struct MigrationsTests {
         let applied = try await db.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
-        #expect(applied == ["v1_initial", "v2_extraction_counts", "v3_retrieval_and_supersession", "v4_folders"])
+        #expect(applied == ["v1_initial", "v2_extraction_counts", "v3_retrieval_and_supersession", "v4_folders", "v5_source_folder_paths"])
     }
 
     @Test("v2 adds the nullable extraction-count columns to source_files")

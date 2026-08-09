@@ -1,6 +1,10 @@
 import Foundation
 
 public struct Memory: Codable, Identifiable, Sendable, Equatable {
+    /// Mirrors `MemoryStore.inboxFolderID`; declared here so `Memory` stays
+    /// free of any store dependency.
+    public static let inboxFolderID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
     public let id: UUID
     public var type: MemoryType
     public var title: String?
@@ -25,7 +29,7 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         headline: String? = nil,
         content: String,
         tags: [String] = [],
-        folderID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        folderID: UUID = Memory.inboxFolderID,
         sessionID: String? = nil,
         source: String? = nil,
         supersededBy: [UUID]? = nil,
@@ -46,6 +50,40 @@ public struct Memory: Codable, Identifiable, Sendable, Equatable {
         self.supersedes = supersedes
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+}
+
+// MARK: - Codable
+
+extension Memory {
+    private enum CodingKeys: String, CodingKey {
+        case id, type, title, headline, content, tags, folderID, sessionID
+        case source, supersededBy, supersedes, createdAt, updatedAt
+    }
+
+    /// Decoded by hand so archives written before folders existed still load.
+    /// The synthesized initializer would fail the whole file on a missing
+    /// `folderID`, which is every export from a pre-folders release — and the
+    /// archive's own schema version could not catch it, because the field was
+    /// added without bumping it. Fields absent from older archives fall back to
+    /// the same defaults `init` uses.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(UUID.self, forKey: .id),
+            type: try c.decode(MemoryType.self, forKey: .type),
+            title: try c.decodeIfPresent(String.self, forKey: .title),
+            headline: try c.decodeIfPresent(String.self, forKey: .headline),
+            content: try c.decode(String.self, forKey: .content),
+            tags: try c.decodeIfPresent([String].self, forKey: .tags) ?? [],
+            folderID: try c.decodeIfPresent(UUID.self, forKey: .folderID) ?? Memory.inboxFolderID,
+            sessionID: try c.decodeIfPresent(String.self, forKey: .sessionID),
+            source: try c.decodeIfPresent(String.self, forKey: .source),
+            supersededBy: try c.decodeIfPresent([UUID].self, forKey: .supersededBy),
+            supersedes: try c.decodeIfPresent([UUID].self, forKey: .supersedes),
+            createdAt: try c.decode(Date.self, forKey: .createdAt),
+            updatedAt: try c.decode(Date.self, forKey: .updatedAt)
+        )
     }
 }
 
