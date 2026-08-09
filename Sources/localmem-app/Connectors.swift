@@ -89,7 +89,12 @@ struct ConnectorsCatalogView: View {
             VStack(alignment: .leading, spacing: 24) {
                 PageHeader(
                     title: "Connectors",
-                    subtitle: "Bring existing context in from your files and apps — extracted on-device, privately."
+                    // Not "extracted on-device, privately": that is only true of
+                    // the Apple backend. It read as an unconditional promise
+                    // exactly where it was least true — a Mac without Apple
+                    // Intelligence has no on-device option at all, so the
+                    // agent backend is the only one it can offer.
+                    subtitle: "Bring existing context in from your files and apps — you choose how each import is extracted, before any file is read."
                 )
 
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
@@ -137,7 +142,11 @@ struct ConnectorsCatalogView: View {
                 choices.append(BackendChoice(
                     backend: .agent(agent.id),
                     title: agent.name,
-                    detail: "Reads your files with \(agent.name) — more thorough on tables and complex documents. Uses your \(agent.name) plan.",
+                    // "Reads your files with X" was ambiguous in the direction
+                    // that flattered us — it can be read as "runs the X binary
+                    // locally". Name the egress: this is the one path in
+                    // Localmem where user content leaves the Mac.
+                    detail: "Sends the text of your files to \(agent.name) — more thorough on tables and complex documents. Uses your \(agent.name) plan.",
                     symbol: "terminal", agentID: agent.id))
             }
             detecting = false

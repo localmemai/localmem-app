@@ -61,7 +61,9 @@ search, permissions, and audit behavior:
 - **Import from your files.** Pick Text, Markdown, or PDF files and Localmem
   extracts the key facts into memories — on-device via Apple Intelligence when
   available, otherwise through a CLI agent you already use (Claude Code or
-  Codex). Every candidate fact is then verified against the source document
+  Codex), which sends the text of those files to that agent's provider. You
+  pick the engine before choosing files, and there is no silent fallback
+  between them. Every candidate fact is then verified against the source document
   before anything is stored, and each file shows its "N extracted → M kept"
   tally. You choose every file; nothing is scanned automatically.
 - **One-command setup.** `localmem setup` registers the MCP server with every
