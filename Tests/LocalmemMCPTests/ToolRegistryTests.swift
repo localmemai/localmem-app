@@ -443,6 +443,45 @@ struct ToolRegistryTests {
         #expect(filtered.allSatisfy { $0.resultCount == 1 })
     }
 
+    /// The partial case above was already covered. This is the total one: every
+    /// match sensitive, so the caller gets an empty list. It has to be
+    /// distinguishable from "found nothing", and it has to leave an audit row —
+    /// a denied read is the one event that shows the access control working, and
+    /// it was the one event the vault never recorded.
+    @Test("A fully blocked search still records access_filtered")
+    func fullyBlockedSearchRecordsAccessFiltered() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".sqlite3")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let database = try LocalmemDatabase(url: tmp)
+        let store = MemoryStore(database: database)
+        let activityStore = ActivityStore(database: database)
+        let identity = MCPClientIdentity(fallback: "test-client")
+        let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
+
+        let secret = try await store.createFolder(name: "Acme Corp", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        try await store.setAgentStatus(id: "test-client", status: .nonSensitiveOnly)
+        _ = try await store.add(content: "acme staging behind the VPN", type: .fact,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "acme renews in Q3", type: .project,
+                                folderID: secret.id, actorKind: .cli, actorID: "user")
+
+        let search = try await registry.call(
+            name: "memory_search",
+            arguments: ["query": .string("acme")]
+        ).content.firstText
+        #expect(!search.contains("staging"))
+        #expect(search.contains("accessNote"))
+
+        let filtered = try await activityStore.recent(limit: 10)
+            .filter { $0.operation == "access_filtered" }
+        #expect(filtered.count == 1)
+        #expect(filtered.first?.actorID == "test-client")
+        #expect(filtered.first?.resultCount == 2)
+        #expect(filtered.allSatisfy { Activity.blockedOperations.contains($0.operation) })
+    }
+
     @Test("MCP update cannot edit a memory excluded for the client")
     func updateDeniedForExcludedMemory() async throws {
         let tmp = FileManager.default.temporaryDirectory

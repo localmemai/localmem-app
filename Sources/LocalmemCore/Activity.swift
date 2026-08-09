@@ -29,6 +29,17 @@ public struct Activity: Codable, Identifiable, Sendable, Equatable {
         self.query = query
         self.resultCount = resultCount
     }
+
+    /// Operations recording that an agent was refused something.
+    ///
+    /// `access_filtered` — the call succeeded but sensitive results were held
+    /// back; `resultCount` is how many. `access_blocked` — the call was refused
+    /// outright.
+    ///
+    /// Named here rather than as literals at each call site because they are
+    /// compared across three targets: written by the MCP server, counted by the
+    /// app's Blocked card, and styled by the audit log.
+    public static let blockedOperations: Set<String> = ["access_filtered", "access_blocked"]
 }
 
 public enum ActorKind: String, Codable, Sendable {
