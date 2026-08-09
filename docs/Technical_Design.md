@@ -717,11 +717,7 @@ code path (§12).
 
 ### Settings
 
-Tabs: **General** (launch at login, menu bar, theme, re-run setup), **Access
-control** (roster/overrides view), **Data** (DB path, Finder, disk usage, export
-JSON, import, vacuum), **Clients** (the auto-detect grid, re-runnable; per-client
-status, last access, Disconnect / Reconfigure), **About** (version, GitHub,
-feedback).
+Single-page grouped view: **Appearance** (theme chips: System, Light, Dark), **Software Updates** (automatic check toggle & manual check button), **Vault Storage** (dynamic SQLite path & Reveal in Finder button), **About & Links** (version `v1.0.1`, GitHub, Website `https://localmem.ai`).
 
 ### Keyboard shortcuts
 
@@ -808,10 +804,7 @@ app should not pretend otherwise:
 | DMG (today's only channel) | Us | Manual check + assisted download (below) |
 | Homebrew cask (planned) | Homebrew | Nothing — `brew upgrade` is the contract |
 
-**The check is user-initiated, always.** No launch check, no timer. The user
-clicks the footer cell or **Localmem → Check for Updates…**; the app fetches
-`api.github.com/repos/localmemai/localmem-app/releases`, and that is the only
-circumstance in which it makes the request (§5). Rules:
+**Update check triggers:** The check can be triggered manually at any time by clicking the status bar footer cell, the Settings window **Check Now** button, or **Localmem → Check for Updates…**. Additionally, when **"Check for updates automatically"** is enabled (`autoCheckForUpdates = true`, default ON in Setup Wizard), the app performs a quiet background update check on launch once per 24 hours without sending telemetry. The app fetches `api.github.com/repos/localmemai/localmem-app/releases`. Rules:
 
 - **Fetch the release *list*, not `/releases/latest`.** Same single call, but it
   lets the app scan every release newer than the running version — a security
