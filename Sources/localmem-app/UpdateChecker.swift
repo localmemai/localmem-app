@@ -52,7 +52,7 @@ public struct GitHubReleaseInfo: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// Manager for app version display and update checking (§12 of Technical Design).
+/// Manager for app version display, update checking, and assisted download (§12 of Technical Design).
 @Observable @MainActor
 public final class UpdateChecker {
     public static let shared = UpdateChecker()
@@ -72,6 +72,13 @@ public final class UpdateChecker {
     public var showUpdateModal: Bool = false
     public var userInitiatedMessage: String? = nil
 
+    // Assisted download state
+    public var isDownloading: Bool = false
+    public var downloadProgress: Double = 0.0
+    public var isReadyToInstall: Bool = false
+    public var mountedVolumePath: String? = nil
+    public var downloadError: String? = nil
+
     public var currentVersion: String {
         LocalmemVersion.current
     }
@@ -82,11 +89,8 @@ public final class UpdateChecker {
 
     public func checkOnLaunchIfDue() async {
         guard autoCheckForUpdates else { return }
-        let now = Date().timeIntervalSince1970
-        let oneDay: TimeInterval = 86400
-        if now - lastUpdateCheckTimestamp > oneDay {
-            await checkForUpdates(userInitiated: false)
-        }
+        // Run quiet async update check on launch
+        await checkForUpdates(userInitiated: false)
     }
 
     public func checkForUpdates(userInitiated: Bool = false) async {
@@ -149,17 +153,72 @@ public final class UpdateChecker {
         }
     }
 
+    public func downloadAndPrepareUpdate(_ release: GitHubReleaseInfo) async {
+        guard let dmgUrlStr = release.dmgDownloadUrl, let downloadURL = URL(string: dmgUrlStr) else {
+            // Fallback: open release page if no direct DMG asset exists
+            openReleasePage(release)
+            return
+        }
+
+        isDownloading = true
+        downloadProgress = 0.1
+        downloadError = nil
+
+        do {
+            let (tempURL, response) = try await URLSession.shared.download(from: downloadURL)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw NSError(domain: "UpdateChecker", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to download update image."])
+            }
+
+            downloadProgress = 0.8
+
+            // Copy to temporary file with .dmg extension
+            let destination = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Localmem-\(release.cleanVersion).dmg")
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempURL, to: destination)
+
+            // Gatekeeper check: spctl -a -t open --context context:primary-signature <path>
+            let verifyProcess = Process()
+            verifyProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
+            verifyProcess.arguments = ["-a", "-t", "open", "--context", "context:primary-signature", destination.path]
+            try? verifyProcess.run()
+            verifyProcess.waitUntilExit()
+
+            // Mount DMG via hdiutil
+            let mountProcess = Process()
+            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            mountProcess.arguments = ["attach", destination.path, "-nobrowse"]
+            try? mountProcess.run()
+            mountProcess.waitUntilExit()
+
+            downloadProgress = 1.0
+            isDownloading = false
+            isReadyToInstall = true
+            mountedVolumePath = "/Volumes/Localmem"
+        } catch {
+            isDownloading = false
+            downloadError = "Download failed: \(error.localizedDescription)"
+        }
+    }
+
     public func openReleasePage(_ release: GitHubReleaseInfo) {
         if let url = URL(string: release.htmlUrl) {
             NSWorkspace.shared.open(url)
         }
     }
 
-    public func downloadUpdate(_ release: GitHubReleaseInfo) {
-        if let dmgStr = release.dmgDownloadUrl, let url = URL(string: dmgStr) {
-            NSWorkspace.shared.open(url)
-        } else if let url = URL(string: release.htmlUrl) {
-            NSWorkspace.shared.open(url)
+    public func quitAndInstall() {
+        if let mountPath = mountedVolumePath, FileManager.default.fileExists(atPath: mountPath) {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountPath)
+        } else {
+            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            if let downloads {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: downloads.path)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.terminate(nil)
+            exit(0)
         }
     }
 }
@@ -167,6 +226,7 @@ public final class UpdateChecker {
 public struct UpdateModalView: View {
     public let release: GitHubReleaseInfo
     public let isSecurityFix: Bool
+    @State private var checker = UpdateChecker.shared
     @Environment(\.dismiss) private var dismiss
 
     public init(release: GitHubReleaseInfo, isSecurityFix: Bool) {
@@ -179,9 +239,9 @@ public struct UpdateModalView: View {
             HStack(spacing: 12) {
                 Image(systemName: isSecurityFix ? "shield.alert.fill" : "arrow.down.circle.fill")
                     .font(.largeTitle)
-                    .foregroundStyle(isSecurityFix ? .red : .accentColor)
+                    .foregroundStyle(isSecurityFix ? .red : Color.accentColor)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Localmem \(release.cleanVersion) Available")
+                    Text(checker.isReadyToInstall ? "Ready to Install Localmem \(release.cleanVersion)" : "Localmem \(release.cleanVersion) Available")
                         .font(.headline)
                     if isSecurityFix {
                         Text("Security Update Available")
@@ -190,8 +250,12 @@ public struct UpdateModalView: View {
                             .padding(.vertical, 2)
                             .background(.red.opacity(0.15), in: Capsule())
                             .foregroundStyle(.red)
+                    } else if checker.isReadyToInstall {
+                        Text("Update image downloaded and mounted.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     } else {
-                        Text("A new version of Localmem is ready for download")
+                        Text("A new version of Localmem is ready for download.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -200,32 +264,70 @@ public struct UpdateModalView: View {
 
             Divider()
 
-            if let body = release.body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if checker.isDownloading {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Downloading update image…")
+                        .font(.subheadline.weight(.medium))
+                    ProgressView(value: checker.downloadProgress)
+                        .progressViewStyle(.linear)
+                }
+                .padding(.vertical, 8)
+            } else if checker.isReadyToInstall {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Steps to complete update:")
+                        .font(.subheadline.weight(.semibold))
+                    Text("1. Click **Quit and Install** below to open the disk image.")
+                        .font(.caption)
+                    Text("2. Drag **Localmem** into your **Applications** folder to replace the old app.")
+                        .font(.caption)
+                    Text("3. Re-open Localmem.")
+                        .font(.caption)
+                }
+                .padding(12)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            } else if let body = release.body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ScrollView {
                     Text(body)
                         .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 180)
+                .frame(maxHeight: 160)
             }
 
-            Text("Memories in your vault are stored outside the app bundle and remain completely safe during app updates.")
+            if let err = checker.downloadError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            Text("Memories in your vault are stored safely outside the app bundle (~/Library/Application Support/Localmem/) and remain completely intact.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             HStack {
-                Button("Later") {
+                Button(checker.isReadyToInstall ? "Cancel" : "Later") {
                     dismiss()
                 }
                 Spacer()
-                Button("Download Update") {
-                    UpdateChecker.shared.downloadUpdate(release)
-                    dismiss()
+                if checker.isReadyToInstall {
+                    Button("Quit and Install") {
+                        checker.quitAndInstall()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if checker.isDownloading {
+                    Button("Downloading…") {}
+                        .disabled(true)
+                } else {
+                    Button("Download Update") {
+                        Task {
+                            await checker.downloadAndPrepareUpdate(release)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .padding(24)
-        .frame(width: 440)
+        .frame(width: 460)
     }
 }
