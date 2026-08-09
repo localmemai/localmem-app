@@ -50,6 +50,70 @@ public struct GitHubReleaseInfo: Codable, Equatable, Sendable, Identifiable {
     public var dmgDownloadUrl: String? {
         assets?.first { $0.name.lowercased().hasSuffix(".dmg") }?.browserDownloadUrl
     }
+
+    /// True when the notes carry the `## Security` heading (or an explicit
+    /// `[security]` marker) that the release checklist requires for a
+    /// security-relevant release. Nothing in the GitHub API reports this, so it
+    /// is a convention — see §12. Deliberately *not* a bare "security fix"
+    /// substring match: "contains no security fixes" would trip it.
+    public var flagsSecurityFix: Bool {
+        guard let body else { return false }
+        return body.localizedCaseInsensitiveContains("## security")
+            || body.localizedCaseInsensitiveContains("[security]")
+    }
+}
+
+/// Runs a short-lived subprocess off the main actor and returns its exit status
+/// and stdout. `UpdateChecker` is `@MainActor`, and `waitUntilExit()` blocks the
+/// calling thread — doing that inline froze the UI for the duration of both
+/// `spctl` and `hdiutil`.
+private func runTool(_ path: String, _ arguments: [String]) async -> (status: Int32, output: Data) {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
+            let stdout = Pipe()
+            process.standardOutput = stdout
+            process.standardError = Pipe()
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: (-1, Data()))
+                return
+            }
+            // Drain before waiting: a full pipe buffer would deadlock the child.
+            let data = stdout.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            continuation.resume(returning: (process.terminationStatus, data))
+        }
+    }
+}
+
+/// Forwards `URLSession` download progress. The async `download(from:delegate:)`
+/// reports byte counts only through a delegate, and the alternative — moving the
+/// progress bar to fixed points around an opaque call — shows a bar frozen at
+/// 10% for the whole transfer.
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+
+    init(onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    // Required by the protocol; the async form takes delivery of the file, so
+    // this is never the completion path.
+    func urlSession(_ session: URLSession,
+                    downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {}
 }
 
 /// Manager for app version display, update checking, and assisted download (§12 of Technical Design).
@@ -65,19 +129,46 @@ public final class UpdateChecker {
         case failed(message: String)
     }
 
+    /// Chosen in the setup wizard, changeable in Settings. When off, nothing
+    /// here ever touches the network unless the user presses a button.
     @ObservationIgnored @AppStorage("autoCheckForUpdates") public var autoCheckForUpdates: Bool = true
     @ObservationIgnored @AppStorage("lastUpdateCheckTimestamp") private var lastUpdateCheckTimestamp: Double = 0
 
+    /// How stale the last automatic check must be before launch triggers another.
+    /// Manual checks ignore this entirely.
+    private let automaticCheckInterval: TimeInterval = 24 * 60 * 60
+
+    /// The release the modal is showing, if any.
+    ///
+    /// Carried as an item rather than a `Bool` + a separate lookup into
+    /// `status`: with a flag, a re-check that moved `status` off
+    /// `.updateAvailable` left the sheet presented with nothing inside it and
+    /// no way to dismiss it.
+    public struct PendingUpdate: Identifiable, Equatable, Sendable {
+        public let release: GitHubReleaseInfo
+        public let isSecurityFix: Bool
+        public var id: Int { release.id }
+    }
+
     public var status: Status = .idle
-    public var showUpdateModal: Bool = false
+    public var pendingUpdate: PendingUpdate?
     public var userInitiatedMessage: String? = nil
 
     // Assisted download state
     public var isDownloading: Bool = false
-    public var downloadProgress: Double = 0.0
+    public var downloadedBytes: Int64 = 0
+    public var totalBytes: Int64 = 0
     public var isReadyToInstall: Bool = false
     public var mountedVolumePath: String? = nil
     public var downloadError: String? = nil
+
+    /// Where the downloaded image lives, so it can be cleaned up on cancel.
+    @ObservationIgnored private var downloadedImagePath: URL?
+
+    public var downloadProgress: Double {
+        guard totalBytes > 0 else { return 0 }
+        return min(1, Double(downloadedBytes) / Double(totalBytes))
+    }
 
     public var currentVersion: String {
         LocalmemVersion.current
@@ -87,9 +178,15 @@ public final class UpdateChecker {
 
     public init() {}
 
+    /// The automatic path: opt-in, and at most once per 24h.
+    ///
+    /// The caller must not invoke this before the setup wizard has had its say —
+    /// `autoCheckForUpdates` defaults to `true`, so running it during first
+    /// launch would fire the request before the user could decline it.
     public func checkOnLaunchIfDue() async {
         guard autoCheckForUpdates else { return }
-        // Run quiet async update check on launch
+        let elapsed = Date().timeIntervalSince1970 - lastUpdateCheckTimestamp
+        guard elapsed >= automaticCheckInterval else { return }
         await checkForUpdates(userInitiated: false)
     }
 
@@ -97,6 +194,10 @@ public final class UpdateChecker {
         status = .checking
         userInitiatedMessage = nil
         lastUpdateCheckTimestamp = Date().timeIntervalSince1970
+        // A prepared download belongs to the release that produced it. Leaving
+        // it in place lets a later check offer 1.0.3 while "Quit and Install"
+        // still points at the 1.0.2 volume mounted earlier.
+        await discardPreparedUpdate()
 
         do {
             guard let url = URL(string: releasesAPI) else {
@@ -127,17 +228,19 @@ public final class UpdateChecker {
                 SemVerComparer.compare(release.cleanVersion, currentVersion) == .orderedDescending
             }
 
-            if let latest = newerReleases.first {
-                // Check if any intervening release notes mention security fixes
-                let hasSecurity = newerReleases.contains { rel in
-                    let text = (rel.body ?? "")
-                    return text.localizedCaseInsensitiveContains("## security") ||
-                           text.localizedCaseInsensitiveContains("security fix") ||
-                           text.localizedCaseInsensitiveContains("[security]")
-                }
+            // Highest version, not first-listed: GitHub orders by creation date,
+            // so a 1.0.2 backport published after 1.1.0 would otherwise win.
+            let latest = newerReleases.max { a, b in
+                SemVerComparer.compare(a.cleanVersion, b.cleanVersion) == .orderedAscending
+            }
+
+            if let latest {
+                // Scan every intervening release, not just the newest: a fix
+                // shipped in 1.1.0 still matters to someone going 1.0.1 → 1.3.0.
+                let hasSecurity = newerReleases.contains(where: \.flagsSecurityFix)
                 status = .updateAvailable(release: latest, isSecurityFix: hasSecurity)
                 if userInitiated {
-                    showUpdateModal = true
+                    pendingUpdate = PendingUpdate(release: latest, isSecurityFix: hasSecurity)
                 }
             } else {
                 status = .upToDate(lastChecked: Date())
@@ -161,44 +264,91 @@ public final class UpdateChecker {
         }
 
         isDownloading = true
-        downloadProgress = 0.1
+        downloadedBytes = 0
+        totalBytes = 0
         downloadError = nil
 
         do {
-            let (tempURL, response) = try await URLSession.shared.download(from: downloadURL)
+            let delegate = DownloadProgressDelegate { [weak self] written, expected in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.downloadedBytes = written
+                    self.totalBytes = expected
+                }
+            }
+            let (tempURL, response) = try await URLSession.shared.download(from: downloadURL, delegate: delegate)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 throw NSError(domain: "UpdateChecker", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to download update image."])
             }
-
-            downloadProgress = 0.8
 
             // Copy to temporary file with .dmg extension
             let destination = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Localmem-\(release.cleanVersion).dmg")
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: tempURL, to: destination)
+            downloadedImagePath = destination
 
-            // Gatekeeper check: spctl -a -t open --context context:primary-signature <path>
-            let verifyProcess = Process()
-            verifyProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
-            verifyProcess.arguments = ["-a", "-t", "open", "--context", "context:primary-signature", destination.path]
-            try? verifyProcess.run()
-            verifyProcess.waitUntilExit()
+            // Gatekeeper verdict, and it has to be *read*. We downloaded an
+            // executable on the user's behalf; mounting an image that failed
+            // this check while the UI says "verified" is worse than not
+            // checking at all. On failure the image is destroyed and there is
+            // no way to proceed.
+            let verify = await runTool("/usr/sbin/spctl",
+                                       ["-a", "-t", "open", "--context", "context:primary-signature", destination.path])
+            guard verify.status == 0 else {
+                try? FileManager.default.removeItem(at: destination)
+                downloadedImagePath = nil
+                isDownloading = false
+                downloadError = "The downloaded update couldn't be verified and was discarded. "
+                              + "Download Localmem again from the releases page."
+                return
+            }
 
-            // Mount DMG via hdiutil
-            let mountProcess = Process()
-            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            mountProcess.arguments = ["attach", destination.path, "-nobrowse"]
-            try? mountProcess.run()
-            mountProcess.waitUntilExit()
+            // Mount it. No -nobrowse: the whole point is that the user drags
+            // out of the volume window, so it has to be visible in Finder.
+            let mount = await runTool("/usr/bin/hdiutil", ["attach", destination.path, "-plist"])
+            guard mount.status == 0, let mountPoint = Self.mountPoint(fromPlist: mount.output) else {
+                try? FileManager.default.removeItem(at: destination)
+                downloadedImagePath = nil
+                isDownloading = false
+                downloadError = "The update image couldn't be opened."
+                return
+            }
 
-            downloadProgress = 1.0
             isDownloading = false
             isReadyToInstall = true
-            mountedVolumePath = "/Volumes/Localmem"
+            // Read from hdiutil rather than assuming /Volumes/Localmem: a stale
+            // mount makes macOS pick "/Volumes/Localmem 1" instead.
+            mountedVolumePath = mountPoint
         } catch {
             isDownloading = false
             downloadError = "Download failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Pulls the mounted volume path out of `hdiutil attach -plist` output.
+    nonisolated static func mountPoint(fromPlist data: Data) -> String? {
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let root = plist as? [String: Any],
+              let entities = root["system-entities"] as? [[String: Any]] else { return nil }
+        return entities.compactMap { $0["mount-point"] as? String }.first
+    }
+
+    /// Detaches the mounted volume and deletes the downloaded image. Called when
+    /// a prepared update is abandoned — on cancel, or when a fresh check
+    /// supersedes it — so temp images and stray volumes don't accumulate.
+    public func discardPreparedUpdate() async {
+        if let path = mountedVolumePath {
+            _ = await runTool("/usr/bin/hdiutil", ["detach", path, "-quiet"])
+        }
+        if let image = downloadedImagePath {
+            try? FileManager.default.removeItem(at: image)
+        }
+        mountedVolumePath = nil
+        downloadedImagePath = nil
+        isReadyToInstall = false
+        downloadError = nil
+        downloadedBytes = 0
+        totalBytes = 0
     }
 
     public func openReleasePage(_ release: GitHubReleaseInfo) {
@@ -207,18 +357,17 @@ public final class UpdateChecker {
         }
     }
 
+    /// Opens the mounted volume and quits. Finder refuses to replace a running
+    /// app, so the app has to be gone before the user drags — which is why the
+    /// modal states the steps before this runs.
     public func quitAndInstall() {
         if let mountPath = mountedVolumePath, FileManager.default.fileExists(atPath: mountPath) {
-            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountPath)
-        } else {
-            let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            if let downloads {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: downloads.path)
-            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: mountPath))
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        // Give Finder a beat to come forward, then hand over to the normal
+        // termination path — no exit(0), which would skip it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             NSApp.terminate(nil)
-            exit(0)
         }
     }
 }
@@ -226,7 +375,7 @@ public final class UpdateChecker {
 public struct UpdateModalView: View {
     public let release: GitHubReleaseInfo
     public let isSecurityFix: Bool
-    @State private var checker = UpdateChecker.shared
+    private let checker = UpdateChecker.shared
     @Environment(\.dismiss) private var dismiss
 
     public init(release: GitHubReleaseInfo, isSecurityFix: Bool) {
@@ -234,10 +383,19 @@ public struct UpdateModalView: View {
         self.isSecurityFix = isSecurityFix
     }
 
+    private var progressLabel: String {
+        guard checker.totalBytes > 0 else { return "Downloading update image…" }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let done = formatter.string(fromByteCount: checker.downloadedBytes)
+        let total = formatter.string(fromByteCount: checker.totalBytes)
+        return "Downloading… \(done) of \(total)"
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                Image(systemName: isSecurityFix ? "shield.alert.fill" : "arrow.down.circle.fill")
+                Image(systemName: isSecurityFix ? "shield.lefthalf.filled" : "arrow.down.circle.fill")
                     .font(.largeTitle)
                     .foregroundStyle(isSecurityFix ? .red : Color.accentColor)
                 VStack(alignment: .leading, spacing: 4) {
@@ -251,7 +409,7 @@ public struct UpdateModalView: View {
                             .background(.red.opacity(0.15), in: Capsule())
                             .foregroundStyle(.red)
                     } else if checker.isReadyToInstall {
-                        Text("Update image downloaded and mounted.")
+                        Text("Update image downloaded and verified.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
@@ -266,15 +424,21 @@ public struct UpdateModalView: View {
 
             if checker.isDownloading {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Downloading update image…")
+                    Text(progressLabel)
                         .font(.subheadline.weight(.medium))
-                    ProgressView(value: checker.downloadProgress)
-                        .progressViewStyle(.linear)
+                        .monospacedDigit()
+                    if checker.totalBytes > 0 {
+                        ProgressView(value: checker.downloadProgress)
+                            .progressViewStyle(.linear)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                    }
                 }
                 .padding(.vertical, 8)
             } else if checker.isReadyToInstall {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Steps to complete update:")
+                    Text("Localmem needs to quit before it can be replaced.")
                         .font(.subheadline.weight(.semibold))
                     Text("1. Click **Quit and Install** below to open the disk image.")
                         .font(.caption)
@@ -306,14 +470,19 @@ public struct UpdateModalView: View {
 
             HStack {
                 Button(checker.isReadyToInstall ? "Cancel" : "Later") {
+                    // Abandoning a prepared update unmounts it and deletes the
+                    // image, so the next check starts from nothing.
+                    Task { await checker.discardPreparedUpdate() }
                     dismiss()
                 }
+                .keyboardShortcut(.cancelAction)
                 Spacer()
                 if checker.isReadyToInstall {
                     Button("Quit and Install") {
                         checker.quitAndInstall()
                     }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 } else if checker.isDownloading {
                     Button("Downloading…") {}
                         .disabled(true)
@@ -324,6 +493,7 @@ public struct UpdateModalView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
         }

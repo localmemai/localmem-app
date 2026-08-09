@@ -211,11 +211,8 @@ struct SettingsView: View {
         .padding(16)
         .frame(width: 420)
         .background(.background)
-        .sheet(isPresented: $updateChecker.showUpdateModal) {
-            if case .updateAvailable(let release, let isSecurity) = updateChecker.status {
-                UpdateModalView(release: release, isSecurityFix: isSecurity)
-            }
-        }
+        // The update modal is presented by ContentView alone. Binding the same
+        // flag here too made one flip drive two presentations.
     }
 
     @ViewBuilder
@@ -896,13 +893,11 @@ final class VaultStatusViewModel {
 enum SheetKind: Identifiable {
     case newMemory(initialFolderID: UUID?)
     case editMemory(Memory)
-    case settings
 
     var id: String {
         switch self {
         case .newMemory:                 return "new"
         case .editMemory(let memory):    return "edit-\(memory.id)"
-        case .settings:                  return "settings"
         }
     }
 }
@@ -1072,7 +1067,6 @@ struct ContentView: View {
                             withAnimation(.snappy) { sidebarCollapsed.toggle() }
                         },
                         onNewMemory: { sheet = .newMemory(initialFolderID: selectedFolderID) },
-                        onOpenSettings: { sheet = .settings },
                         onLock: { statusVM?.setLocked(true) },
                         onExport: exportMemories,
                         onImport: importMemories,
@@ -1150,7 +1144,6 @@ struct ContentView: View {
         }
         .background { sectionShortcuts }
         .onAppear {
-            Task { await updateChecker.checkOnLaunchIfDue() }
             // Screenshot/testing hooks: `LOCALMEM_SHOW_WIZARD=1` forces the
             // setup wizard open; `LOCALMEM_INITIAL_SECTION` (screenshot mode)
             // suppresses the first-run wizard so a specific section is visible.
@@ -1163,6 +1156,14 @@ struct ContentView: View {
             } else if !seenWizard {
                 wizardMode = .firstRun
                 showSetupWizard = true
+            }
+
+            // Only once the wizard has had its say. `autoCheckForUpdates`
+            // defaults to true, so checking before the user has seen the
+            // toggle would fire the request they were about to decline —
+            // the first run is exactly when the promise matters most.
+            if seenWizard {
+                Task { await updateChecker.checkOnLaunchIfDue() }
             }
         }
         .task(id: query) { await memoryVM?.search(query) }
@@ -1256,17 +1257,13 @@ struct ContentView: View {
                         selectedComingSoon = nil
                     }
                 }
-            case .settings:
-                SettingsView()
             }
         }
         .alert(item: $portabilityAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
-        .sheet(isPresented: $updateChecker.showUpdateModal) {
-            if case .updateAvailable(let release, let isSecurity) = updateChecker.status {
-                UpdateModalView(release: release, isSecurityFix: isSecurity)
-            }
+        .sheet(item: $updateChecker.pendingUpdate) { pending in
+            UpdateModalView(release: pending.release, isSecurityFix: pending.isSecurityFix)
         }
     }
 
@@ -1563,11 +1560,11 @@ struct TopToolbar: View {
     let sidebarCollapsed: Bool
     let onToggleSidebar: () -> Void
     let onNewMemory: () -> Void
-    let onOpenSettings: () -> Void
     let onLock: () -> Void
     let onExport: () -> Void
     let onImport: () -> Void
     @FocusState.Binding var searchFocused: Bool
+    @Environment(\.openSettings) private var openSettingsAction
 
     /// When the sidebar is collapsed, the toolbar runs all the way to the
     /// window's left edge — where macOS draws the traffic-light cluster.
@@ -1628,8 +1625,11 @@ struct TopToolbar: View {
     }
 
     private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        onOpenSettings()
+        // The SwiftUI environment action opens the `Settings` scene directly.
+        // The previous form fired `showSettingsWindow:` *and* unconditionally
+        // raised a sheet, so both appeared at once — and the sheet copy had no
+        // way to be dismissed.
+        openSettingsAction()
     }
 }
 
@@ -3950,8 +3950,8 @@ struct StatusBar: View {
         let (glyph, glyphColor, title, detail) = versionSegmentContent(for: updateChecker.status)
 
         return Button {
-            if case .updateAvailable = updateChecker.status {
-                updateChecker.showUpdateModal = true
+            if case .updateAvailable(let release, let isSecurity) = updateChecker.status {
+                updateChecker.pendingUpdate = .init(release: release, isSecurityFix: isSecurity)
             } else {
                 Task {
                     await updateChecker.checkForUpdates(userInitiated: true)

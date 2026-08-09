@@ -203,33 +203,41 @@ cloud connectors that expose an entire account or drive.
 
 ### Network posture
 
-The product promise is about *plaintext*, but the stronger claim is available
-here and worth keeping: **nothing in Localmem opens a network connection unless
-the user clicks a button that says it will.** This is the complete list of
-outbound connections the app, CLI, and MCP server make:
+The product promise is about *plaintext*, but a stronger claim is available here
+and worth keeping: **the only thing Localmem ever sends anywhere is the question
+"is there a newer version?", and the user decides at setup whether it may even
+ask.** This is the complete list of outbound connections the app, CLI, and MCP
+server make:
 
 | Connection | Made by | Trigger | Sends |
 |---|---|---|---|
-| `api.github.com/repos/localmemai/localmem-app/releases` | App only | User clicks **Check for Updates** | Nothing but the HTTPS request (GitHub sees IP + user agent) |
+| `api.github.com/repos/localmemai/localmem-app/releases` | App only | **Check for Updates**, or once per 24h on launch when the user opted in at setup | Nothing but the HTTPS request (GitHub sees IP + user agent) |
 | The release DMG URL | App only | User clicks **Download Update** | Same |
 
-That's the whole table, and both rows are user-initiated. There is **no periodic
-check, no check on launch, no telemetry, and no analytics** — nothing fires on a
-timer, so there is nothing to opt out of and no setting to explain. The CLI and
-MCP server make no network calls at all.
+That's the whole table. There is **no telemetry and no analytics** — no
+identifier, no counts, no vault metadata, nothing about usage. The CLI and MCP
+server make no network calls at all.
+
+**The automatic check is opt-in at first run**, presented on the wizard's
+"Protect vault & updates" screen alongside the Touch ID choice, and changeable
+in Settings. Two invariants follow, and both are load-bearing:
+
+1. **Nothing fires before the user has answered.** The preference defaults to
+   on, so a launch check that ran before the wizard would fire exactly the
+   request the user was about to decline. `ContentView` runs it only once
+   `seenWizard` is set.
+2. **Off means off.** With the toggle off there is no timer and no launch check;
+   the only connections are the ones behind a button press.
 
 **Any new entry belongs in this table before it ships.** If a change can't be
 written as a row here, it's a change to the product promise and has to be argued
 as one.
 
-Why this is stricter than the norm and worth the strictness: comparable apps all
-check automatically and disclose it — Obsidian checks by default with the off
-switch in Settings → About, Cryptomator's privacy policy discloses that its check
-sends OS version, app version, time, and IP, and Signal auto-updates with no
-opt-out. Any of those would have been defensible. But "no connection without a
-click" needs no policy page, no toggle, and no qualification, and for a product
-whose entire pitch is the vault staying local, an unqualified sentence is worth
-more than the update adoption it costs. The cost is real and named in §12.
+This is stricter than the norm: Obsidian checks by default with the off switch
+buried in Settings → About, Cryptomator's check sends OS version, app version,
+time and IP, and Signal auto-updates with no opt-out at all. Asking once, up
+front, alongside the other trust decision the wizard already makes, costs one
+toggle and means the answer is the user's rather than ours.
 
 ### Vault encryption (planned)
 
@@ -804,7 +812,12 @@ app should not pretend otherwise:
 | DMG (today's only channel) | Us | Manual check + assisted download (below) |
 | Homebrew cask (planned) | Homebrew | Nothing — `brew upgrade` is the contract |
 
-**Update check triggers:** The check can be triggered manually at any time by clicking the status bar footer cell, the Settings window **Check Now** button, or **Localmem → Check for Updates…**. Additionally, when **"Check for updates automatically"** is enabled (`autoCheckForUpdates = true`, default ON in Setup Wizard), the app performs a quiet background update check on launch once per 24 hours without sending telemetry. The app fetches `api.github.com/repos/localmemai/localmem-app/releases`. Rules:
+**Triggers.** Manual at any time — the footer cell, **Check Now** in Settings, or
+**Localmem → Check for Updates…**. Automatic on launch, at most once per 24h,
+*only* when the user opted in at setup (`autoCheckForUpdates`) and only after the
+wizard has been answered; see §5 for why both conditions are load-bearing. The
+throttle is enforced against `lastUpdateCheckTimestamp` in `checkOnLaunchIfDue`;
+manual checks ignore it. Rules:
 
 - **Fetch the release *list*, not `/releases/latest`.** Same single call, but it
   lets the app scan every release newer than the running version — a security
@@ -812,7 +825,13 @@ app should not pretend otherwise:
   whose notes we'd otherwise never read. Cost: filtering `draft` and `prerelease`
   ourselves, which `/releases/latest` does for us.
 - **Comparison is component-wise semver**, never string compare — lexically
-  `1.10.0` sorts below `1.9.0`.
+  `1.10.0` sorts below `1.9.0`. Prerelease and `+build` suffixes are stripped,
+  and a non-numeric component truncates the parse rather than being skipped:
+  dropping it would shift the remainder left and make `1.0.1+build.2` read as
+  `1.0.2`, i.e. newer than the version actually running.
+- **The offered release is the highest by that comparison**, not the first the
+  API returns. GitHub orders by creation date, so a patch backport published
+  after a minor release would otherwise supersede it.
 - **Security fixes are flagged by convention.** Nothing in the API says a release
   was security-relevant, so the release notes carry a `## Security` heading and
   the app greps for it across the intervening releases. This is a release-process
@@ -825,22 +844,36 @@ app should not pretend otherwise:
 fetches the DMG, verifies it, then mounts it and quits. The user drags, replaces,
 reopens. What the app must get right:
 
-1. **Verify before opening.** The app downloaded an executable on the user's
-   behalf, so it checks the Gatekeeper verdict on the file
-   (`spctl -a -t open --context context:primary-signature`) before it goes
-   anywhere near Finder. On failure the file is deleted and the user is told
-   plainly — the one path where a modal is the correct amount of friction.
-2. **Quit before the swap, and say so first.** Finder refuses to replace a
+1. **Verify before opening, and *read the verdict*.** The app downloaded an
+   executable on the user's behalf, so it checks the Gatekeeper result on the
+   file (`spctl -a -t open --context context:primary-signature`) before the file
+   goes anywhere near Finder. Running `spctl` and discarding its exit status —
+   which is what shipped first — is worse than not checking, because the UI says
+   "verified" either way. On a non-zero status the image is deleted and there is
+   no path forward from the dialog: the one place where a modal is the correct
+   amount of friction.
+2. **Take the mount point from `hdiutil`, don't assume it.** `attach -plist`
+   reports the real `mount-point`; hardcoding `/Volumes/Localmem` breaks the
+   moment a stale mount pushes macOS to `/Volumes/Localmem 1`, and the user is
+   then sent to drag from the *previous* version's volume. The attach is not
+   run with `-nobrowse` — the volume window is the thing the user drags out of.
+3. **Quit before the swap, and say so first.** Finder refuses to replace a
    running app, so the instructions have to be read while the app is still up.
-   The final dialog states the three steps, then **Quit and Install** mounts the
-   DMG and terminates, leaving the drag-to-Applications window on screen as the
-   reminder.
-3. **Say the memories are safe.** Replacing an app bundle reads as destructive.
+   The final dialog states the three steps, then **Quit and Install** opens the
+   volume and terminates, leaving that window on screen as the reminder.
+4. **Say the memories are safe.** Replacing an app bundle reads as destructive.
    The dialog states that memories live outside the bundle, because that is the
    fear that actually shows up at this moment.
+5. **A prepared update is owned by the release that produced it.** Cancelling,
+   or running a fresh check, detaches the volume and deletes the image.
+   Otherwise "Quit and Install" on a later check happily installs the earlier
+   download.
 
-Abandoning halfway is harmless: the user relaunches the old version and the DMG
-sits in Downloads.
+Abandoning halfway is harmless: the user relaunches the old version, and the
+image and volume are cleaned up.
+
+Both subprocesses run off the main actor. `waitUntilExit()` on `@MainActor`
+froze the UI for the whole of `spctl` plus `hdiutil attach`.
 
 **Why not Sparkle.** Sparkle's value is the *install* step — a helper process
 that outlives the app to swap a running bundle, EdDSA verification of the
