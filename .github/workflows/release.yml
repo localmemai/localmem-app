@@ -67,6 +67,23 @@ jobs:
           fi
           echo "LocalmemVersion.current matches tag."
 
+      # Fails before anything is signed or published, because a release cannot
+      # be un-published. Notes are required rather than optional: the app's
+      # update dialog renders this body verbatim, and the `## Security` heading
+      # the update check greps for can only come from a human — GitHub's
+      # generated notes will never contain it.
+      - name: Verify release notes exist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          NOTES="docs/release-notes/$VERSION.md"
+          if [ ! -s "$NOTES" ]; then
+            echo "::error::Missing $NOTES — write the release notes before tagging (see RELEASING.md)"
+            exit 1
+          fi
+          echo "Found $NOTES:"
+          cat "$NOTES"
+
       - name: Import Developer ID certificate
         env:
           CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
@@ -139,15 +156,40 @@ jobs:
           cd dist
           shasum -a 256 "Localmem-$VERSION.dmg" Localmem.dmg > checksums.txt
           cat checksums.txt
+
+      # Body order is deliberate: the app's update dialog renders this verbatim
+      # in a short scroll area, so the first few lines are all most users read.
+      # Hand-written notes lead, the generated PR list follows, and checksums —
+      # reference material — go last. `--generate-notes` can only append below
+      # `--notes-file`, which would have put a SHA-256 block above the notes, so
+      # the generated section is fetched and composed in explicitly instead.
+      - name: Compose release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          BODY=dist/release-body.md
+          cat "docs/release-notes/$VERSION.md" > "$BODY"
+          printf '\n' >> "$BODY"
+
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" \
+            --jq .body >> "$BODY"
+          printf '\n' >> "$BODY"
+
           {
             echo "## Checksums"
             echo
             echo '`Localmem.dmg` is the same file as the versioned DMG — the stable-URL alias used by the localmem.ai download button.'
             echo
             echo '```'
-            cat checksums.txt
+            cat dist/checksums.txt
             echo '```'
-          } > release-notes-extra.md   # gh prepends this above the generated notes
+          } >> "$BODY"
+
+          echo "--- release body ---"
+          cat "$BODY"
 
       - name: Create GitHub Release
         env:
@@ -159,6 +201,5 @@ jobs:
             "dist/Localmem.dmg" \
             "dist/checksums.txt" \
             --title "Localmem $VERSION" \
-            --generate-notes \
-            --notes-file dist/release-notes-extra.md \
+            --notes-file dist/release-body.md \
             --latest
