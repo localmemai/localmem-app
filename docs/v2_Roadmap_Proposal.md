@@ -157,20 +157,36 @@ ALTER TABLE memories ADD COLUMN session_id TEXT;
 
 ---
 
-## 5. Sequencing
+## 5. OS Compatibility & Graceful Degradation
+
+### What to Build
+
+Currently, Localmem specifies a minimum platform target of macOS 26. However, many developer setups run older OS versions (macOS 15/Sequoia or macOS 14/Sonoma) or Intel hardware where Apple's on-device `FoundationModels` API is unavailable. Lower the platform constraint to Sonoma/Sequoia to support older macOS versions, while gracefully disabling or hiding unsupported features at runtime.
+
+### How to Build
+
+1. **Lower Platform Target:** Update `Package.swift` platforms to `.macOS(.v14)` or `.macOS(.v15)`.
+2. **Conditional compilation & availability checks:** Verify that all references to `FoundationModels` or `SystemLanguageModel` are correctly enclosed in `#if canImport(FoundationModels)` compile-time guards and `if #available(macOS 26, *)` runtime blocks (Pillar 3 and Apple Extractor/Verifier backends).
+3. **UI Degradation:** If `ConnectorBackends.appleAvailable` is `false` (due to older OS or unsupported hardware), do not show "On-device model" in the import backend choice sheet. Instead, display a helpful tip directing users to install and use Claude Code or Codex.
+4. **CI Testing:** Add build configuration targets in GitHub Actions to verify compilation succeeds on older target platforms.
+
+---
+
+## 6. Sequencing
 
 | Order | Item | Effort | Risk |
 |---|---|---|---|
 | 1 | Split retrieval + BM25 ranking (§1) | Days | Low — pure read path, nothing destroyed if ranking is wrong |
-| 2 | Automatic Categorization & Organisation (§4) | ~1 week | Low — cosmetic GUI changes + non-breaking schema columns |
-| 3 | Supersession edges (§2) | ~1 week | Low — append-only |
-| 4 | Extract-and-verify on write (§3) | Weeks | Medium — touches every write |
+| 2 | OS Compatibility & Graceful Degradation (§5) | Days | Low — compiler setting updates and availability guards |
+| 3 | Automatic Categorization & Organisation (§4) | ~1 week | Low — cosmetic GUI changes + non-breaking schema columns |
+| 4 | Supersession edges (§2) | ~1 week | Low — append-only |
+| 5 | Extract-and-verify on write (§3) | Weeks | Medium — touches every write |
 
-**Gate between 3 and 4.** §1, §2, and §3 are justified by daily use today: they make the existing loop measurably better this week, and are cheap. §4 is where the real weeks go, so it needs the thesis validated first.
+**Gate between 4 and 5.** §1, §2, §3, and §4 are justified by daily use today: they make the existing loop measurably better this week, and are cheap. §5 is where the real weeks go, so it needs the thesis validated first.
 
 ---
 
-## 6. Deferred and Cut
+## 7. Deferred and Cut
 
 Each of these was specified in the previous draft. None survive contact with the one workflow that has demonstrated value.
 

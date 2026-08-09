@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "Localmem",
     platforms: [
-        .macOS(.v26),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "LocalmemCore", targets: ["LocalmemCore"]),
