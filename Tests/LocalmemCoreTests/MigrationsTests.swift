@@ -16,7 +16,7 @@ struct MigrationsTests {
         let applied = try await db.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
-        #expect(applied == ["v1_initial", "v2_extraction_counts"])
+        #expect(applied == ["v1_initial", "v2_extraction_counts", "v3_retrieval_and_supersession"])
     }
 
     @Test("v2 adds the nullable extraction-count columns to source_files")
@@ -41,6 +41,7 @@ struct MigrationsTests {
             "memories", "memory_tags", "memory_agent_exclusions", "memories_fts",
             "activity", "activity_memory",
             "sources", "source_files", "source_memories",
+            "memory_supersessions",
         ] {
             #expect(tables.contains(expected), "missing table \(expected)")
         }
@@ -62,6 +63,7 @@ struct MigrationsTests {
             "idx_excl_agent", "idx_memories_created_at",
             "idx_activity_occurred_at", "idx_activity_actor",
             "idx_activity_memory_memory", "idx_source_memories_file",
+            "idx_supersessions_superseded", "idx_supersessions_superseding",
         ])
 
         let triggers = try await db.read { db in

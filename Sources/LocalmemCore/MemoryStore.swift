@@ -27,32 +27,40 @@ public actor MemoryStore {
         content: String,
         type: MemoryType,
         title: String? = nil,
+        headline: String? = nil,
         tags: [String] = [],
         excludedAgents: [String] = [],
+        supersedes: [UUID] = [],
         actorKind: ActorKind,
         actorID: String? = nil
     ) async throws -> Memory {
         let normalizedExclusions = Self.normalizedAgents(excludedAgents)
+        let resolvedHeadline = headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? headline
+            : Self.generateHeadline(from: content)
         // `source` mirrors the actor identity by construction so the memories
         // row and its inline audit row always agree on who created the memory.
         let memory = Memory(
             type: type,
             title: title,
+            headline: resolvedHeadline,
             content: content,
             tags: tags,
             excludedAgents: normalizedExclusions,
-            source: actorID
+            source: actorID,
+            supersedes: supersedes.isEmpty ? nil : supersedes
         )
         try await database.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO memories (id, type, title, content, source, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO memories (id, type, title, headline, content, source, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     memory.id.uuidString,
                     memory.type.rawValue,
                     memory.title,
+                    memory.headline,
                     Data(memory.content.utf8),
                     memory.source,
                     DateFormat.iso8601.string(from: memory.createdAt),
@@ -63,6 +71,13 @@ public actor MemoryStore {
                 try db.execute(
                     sql: "INSERT INTO memory_tags (memory_id, tag) VALUES (?, ?)",
                     arguments: [memory.id.uuidString, tag]
+                )
+            }
+            // Skip a self-link — a memory can never supersede itself.
+            for supersededID in supersedes where supersededID != memory.id {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO memory_supersessions (superseded_id, superseding_id, created_at) VALUES (?, ?, ?)",
+                    arguments: [supersededID.uuidString, memory.id.uuidString, DateFormat.iso8601.string(from: memory.createdAt)]
                 )
             }
             try Self.replaceExclusions(memoryID: memory.id.uuidString, agents: normalizedExclusions, in: db)
@@ -114,22 +129,28 @@ public actor MemoryStore {
         content: String,
         type: MemoryType,
         title: String? = nil,
+        headline: String? = nil,
         tags: [String] = [],
         excludedAgents: [String]? = nil,
+        supersedes: [UUID]? = nil,
         actorKind: ActorKind,
         actorID: String? = nil
     ) async throws -> Memory {
         try await database.write { db in
             let now = Date()
+            let resolvedHeadline = headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? headline
+                : Self.generateHeadline(from: content)
             try db.execute(
                 sql: """
                     UPDATE memories
-                    SET type = ?, title = ?, content = ?, updated_at = ?
+                    SET type = ?, title = ?, headline = ?, content = ?, updated_at = ?
                     WHERE id = ?
                     """,
                 arguments: [
                     type.rawValue,
                     title,
+                    resolvedHeadline,
                     Data(content.utf8),
                     DateFormat.iso8601.string(from: now),
                     id.uuidString,
@@ -153,6 +174,18 @@ public actor MemoryStore {
                 try Self.replaceExclusions(
                     memoryID: id.uuidString,
                     agents: Self.normalizedAgents(excludedAgents),
+                    in: db
+                )
+            }
+
+            // Supersession edges follow the same omit-vs-replace contract as
+            // tags/exclusions: nil keeps the existing history untouched, a
+            // provided array replaces the set this memory supersedes.
+            if let supersedes {
+                try Self.replaceSupersessions(
+                    supersedingID: id.uuidString,
+                    supersededIDs: supersedes,
+                    at: now,
                     in: db
                 )
             }
@@ -248,34 +281,107 @@ public actor MemoryStore {
     }
 
     public func recent(limit: Int = 20) async throws -> [Memory] {
-        try await recent(limit: limit, requestingAgent: nil)
+        try await recent(limit: limit, requestingAgent: nil, includeSuperseded: false)
     }
 
     public func recent(limit: Int = 20, requestingAgent: String?) async throws -> [Memory] {
+        try await recent(limit: limit, requestingAgent: requestingAgent, includeSuperseded: false)
+    }
+
+    public func recent(limit: Int = 20, requestingAgent: String? = nil, includeSuperseded: Bool = false) async throws -> [Memory] {
         try await database.read { db in
+            let rows: [Row]
+            let exclusionsFilter = requestingAgent != nil ? """
+                AND NOT EXISTS (
+                    SELECT 1 FROM memory_agent_exclusions
+                    WHERE memory_id = memories.id AND agent_id = ?
+                )
+            """ : ""
+            
+            let supersessionFilter = !includeSuperseded ? """
+                AND NOT EXISTS (
+                    SELECT 1 FROM memory_supersessions
+                    WHERE superseded_id = memories.id
+                )
+            """ : ""
+
+            // Compact index projection — deliberately omits the `content` BLOB so
+            // the list view never pays to read bodies. Callers fetch full text via
+            // `get(ids:)`. Decoded through `Memory(compactRow:)`.
+            let sql = """
+                SELECT id, type, title, headline, source, created_at, updated_at, EXISTS (
+                    SELECT 1 FROM memory_supersessions WHERE superseded_id = memories.id
+                ) AS is_superseded
+                FROM memories
+                WHERE 1=1
+                \(exclusionsFilter)
+                \(supersessionFilter)
+                ORDER BY is_superseded ASC, created_at DESC, rowid DESC
+                LIMIT ?
+                """
+            
+            var args: [Any] = []
+            if let requestingAgent { args.append(requestingAgent) }
+            args.append(limit)
+            
+            rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args) ?? [])
+            return try Self.attachMetadata(rows: rows, in: db, compact: true)
+        }
+    }
+
+    /// Exposes a batch retrieval method to get the full bodies for a set of memory IDs.
+    public func get(ids: [UUID], requestingAgent: String? = nil) async throws -> [Memory] {
+        guard !ids.isEmpty else { return [] }
+        let idStrings = ids.map { $0.uuidString }
+        return try await database.read { db in
+            let placeholders = Self.placeholders(count: idStrings.count)
             let rows: [Row]
             if let requestingAgent {
                 rows = try Row.fetchAll(
                     db,
                     sql: """
-                        SELECT * FROM memories
-                        WHERE NOT EXISTS (
-                            SELECT 1 FROM memory_agent_exclusions
-                            WHERE memory_id = memories.id AND agent_id = ?
-                        )
-                        ORDER BY created_at DESC, rowid DESC
-                        LIMIT ?
+                        SELECT * FROM memories WHERE id IN (\(placeholders))
+                          AND NOT EXISTS (
+                              SELECT 1 FROM memory_agent_exclusions
+                              WHERE memory_id = memories.id AND agent_id = ?
+                          )
                         """,
-                    arguments: [requestingAgent, limit]
+                    arguments: StatementArguments(idStrings) + [requestingAgent]
                 )
             } else {
                 rows = try Row.fetchAll(
                     db,
-                    sql: "SELECT * FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?",
-                    arguments: [limit]
+                    sql: "SELECT * FROM memories WHERE id IN (\(placeholders))",
+                    arguments: StatementArguments(idStrings)
                 )
             }
-            return try Self.attachMetadata(rows: rows, in: db)
+            // `IN (…)` returns rows in arbitrary order; re-project onto the
+            // caller's id order so results line up with the request. Ids that
+            // were missing or access-blocked simply don't appear (the MCP layer
+            // reports the shortfall to the caller).
+            let memories = try Self.attachMetadata(rows: rows, in: db, compact: false)
+            let byID = Dictionary(memories.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+            return idStrings.compactMap { byID[$0] }
+        }
+    }
+
+    /// Directly links a superseded memory to its superseding successor (append-only history).
+    public func supersede(supersededID: UUID, supersedingID: UUID, actorKind: ActorKind, actorID: String? = nil) async throws {
+        guard supersededID != supersedingID else {
+            throw MemoryStoreError.invalidSupersession
+        }
+        try await database.write { db in
+            let now = Date()
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO memory_supersessions (superseded_id, superseding_id, created_at) VALUES (?, ?, ?)",
+                arguments: [supersededID.uuidString, supersedingID.uuidString, DateFormat.iso8601.string(from: now)]
+            )
+            try ActivityStore.add(Activity(
+                actorKind: actorKind,
+                actorID: actorID,
+                operation: "memory_supersede",
+                memoryID: supersedingID
+            ), in: db)
         }
     }
 
@@ -312,49 +418,59 @@ public actor MemoryStore {
     }
 
     public func search(query: String, limit: Int = 20) async throws -> [Memory] {
-        try await search(query: query, limit: limit, requestingAgent: nil)
+        try await search(query: query, limit: limit, requestingAgent: nil, includeSuperseded: false)
     }
 
     public func search(query: String, limit: Int = 20, requestingAgent: String?) async throws -> [Memory] {
+        try await search(query: query, limit: limit, requestingAgent: requestingAgent, includeSuperseded: false)
+    }
+
+    public func search(query: String, limit: Int = 20, requestingAgent: String? = nil, includeSuperseded: Bool = false) async throws -> [Memory] {
         let fts = Self.sanitizeFTSQuery(query)
         guard !fts.isEmpty else { return [] }
         return try await database.read { db in
             let orderedIDs: [String]
-            if let requestingAgent {
-                orderedIDs = try String.fetchAll(
-                    db,
-                    sql: """
-                        SELECT memory_id FROM memories_fts
-                        WHERE memories_fts MATCH ?
-                          AND NOT EXISTS (
-                              SELECT 1 FROM memory_agent_exclusions
-                              WHERE memory_id = memories_fts.memory_id AND agent_id = ?
-                          )
-                        ORDER BY rank
-                        LIMIT ?
-                        """,
-                    arguments: [fts, requestingAgent, limit]
+            let exclusionsFilter = requestingAgent != nil ? """
+                AND NOT EXISTS (
+                    SELECT 1 FROM memory_agent_exclusions
+                    WHERE memory_id = memories_fts.memory_id AND agent_id = ?
                 )
-            } else {
-                orderedIDs = try String.fetchAll(
-                    db,
-                    sql: """
-                        SELECT memory_id FROM memories_fts
-                        WHERE memories_fts MATCH ?
-                        ORDER BY rank
-                        LIMIT ?
-                        """,
-                    arguments: [fts, limit]
+            """ : ""
+
+            let supersessionFilter = !includeSuperseded ? """
+                AND NOT EXISTS (
+                    SELECT 1 FROM memory_supersessions
+                    WHERE superseded_id = memories_fts.memory_id
                 )
-            }
+            """ : ""
+
+            let sql = """
+                SELECT memory_id, EXISTS (
+                    SELECT 1 FROM memory_supersessions WHERE superseded_id = memories_fts.memory_id
+                ) AS is_superseded
+                FROM memories_fts
+                WHERE memories_fts MATCH ?
+                \(exclusionsFilter)
+                \(supersessionFilter)
+                ORDER BY is_superseded ASC, rank
+                LIMIT ?
+                """
+
+            var args: [Any] = [fts]
+            if let requestingAgent { args.append(requestingAgent) }
+            args.append(limit)
+
+            orderedIDs = try String.fetchAll(db, sql: sql, arguments: StatementArguments(args) ?? [])
             guard !orderedIDs.isEmpty else { return [] }
             let placeholders = Self.placeholders(count: orderedIDs.count)
+            // Compact projection — no `content` BLOB (see `recent`). Ranked order
+            // is restored below via `orderedIDs`.
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM memories WHERE id IN (\(placeholders))",
+                sql: "SELECT id, type, title, headline, source, created_at, updated_at FROM memories WHERE id IN (\(placeholders))",
                 arguments: StatementArguments(orderedIDs)
             )
-            let memories = try Self.attachMetadata(rows: rows, in: db)
+            let memories = try Self.attachMetadata(rows: rows, in: db, compact: true)
             let byID = Dictionary(uniqueKeysWithValues: memories.map { ($0.id.uuidString, $0) })
             return orderedIDs.compactMap { byID[$0] }
         }
@@ -494,15 +610,19 @@ public actor MemoryStore {
     /// so callers composing larger transactions (`importMemories`,
     /// `SourceStore.replaceMemories`) share one insert path.
     static func insertPreservingIdentity(_ memory: Memory, in db: Database) throws -> Bool {
+        let headline = memory.headline?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? memory.headline
+            : Self.generateHeadline(from: memory.content)
         try db.execute(
             sql: """
-                INSERT OR IGNORE INTO memories (id, type, title, content, source, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO memories (id, type, title, headline, content, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
             arguments: [
                 memory.id.uuidString,
                 memory.type.rawValue,
                 memory.title,
+                headline,
                 Data(memory.content.utf8),
                 memory.source,
                 DateFormat.iso8601.string(from: memory.createdAt),
@@ -559,11 +679,21 @@ public actor MemoryStore {
             sql: "SELECT agent_id FROM memory_agent_exclusions WHERE memory_id = ? ORDER BY agent_id",
             arguments: [id]
         )
-        return try Memory(row: row, tags: tags, excludedAgents: exclusions)
+        let supersededBy = try String.fetchAll(
+            db,
+            sql: "SELECT superseding_id FROM memory_supersessions WHERE superseded_id = ?",
+            arguments: [id]
+        ).compactMap { UUID(uuidString: $0) }
+        let supersedes = try String.fetchAll(
+            db,
+            sql: "SELECT superseded_id FROM memory_supersessions WHERE superseding_id = ?",
+            arguments: [id]
+        ).compactMap { UUID(uuidString: $0) }
+        return try Memory(row: row, tags: tags, excludedAgents: exclusions, supersededBy: supersededBy, supersedes: supersedes)
     }
 
     /// Batched metadata fetch for a set of already-loaded memory rows.
-    private static func attachMetadata(rows: [Row], in db: Database) throws -> [Memory] {
+    private static func attachMetadata(rows: [Row], in db: Database, compact: Bool = false) throws -> [Memory] {
         guard !rows.isEmpty else { return [] }
         let ids: [String] = rows.compactMap { $0["id"] }
         let placeholders = placeholders(count: ids.count)
@@ -595,12 +725,74 @@ public actor MemoryStore {
             guard let memID: String = row["memory_id"], let agentID: String = row["agent_id"] else { continue }
             exclusionsByID[memID, default: []].append(agentID)
         }
-        return try rows.compactMap { row in
+        let supersededRows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT superseded_id, superseding_id FROM memory_supersessions
+                WHERE superseded_id IN (\(placeholders))
+                """,
+            arguments: StatementArguments(ids)
+        )
+        var supersededByID: [String: [UUID]] = [:]
+        for row in supersededRows {
+            guard let supersededStr: String = row["superseded_id"],
+                  let supersedingStr: String = row["superseding_id"],
+                  let supersedingUUID = UUID(uuidString: supersedingStr) else { continue }
+            supersededByID[supersededStr, default: []].append(supersedingUUID)
+        }
+        let supersedesRows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT superseded_id, superseding_id FROM memory_supersessions
+                WHERE superseding_id IN (\(placeholders))
+                """,
+            arguments: StatementArguments(ids)
+        )
+        var supersedesByID: [String: [UUID]] = [:]
+        for row in supersedesRows {
+            guard let supersededStr: String = row["superseded_id"],
+                  let supersedingStr: String = row["superseding_id"],
+                  let supersededUUID = UUID(uuidString: supersededStr) else { continue }
+            supersedesByID[supersedingStr, default: []].append(supersededUUID)
+        }
+        return try rows.compactMap { (row: Row) -> Memory? in
             guard let id: String = row["id"] else { return nil }
+            // Compact rows come from a projection with no `content` column, so
+            // they decode through the content-free initializer; full rows carry
+            // the body BLOB.
+            if compact {
+                return try Memory(
+                    compactRow: row,
+                    tags: tagsByID[id] ?? [],
+                    excludedAgents: exclusionsByID[id] ?? [],
+                    supersededBy: supersededByID[id],
+                    supersedes: supersedesByID[id]
+                )
+            }
             return try Memory(
                 row: row,
                 tags: tagsByID[id] ?? [],
-                excludedAgents: exclusionsByID[id] ?? []
+                excludedAgents: exclusionsByID[id] ?? [],
+                supersededBy: supersededByID[id],
+                supersedes: supersedesByID[id]
+            )
+        }
+    }
+
+    /// Replaces the set of memories that `supersedingID` supersedes: clears the
+    /// existing edges for this superseding memory, then re-inserts the provided
+    /// set. Self-links are skipped. Used by `update` so a correction can
+    /// re-point its history trail.
+    private static func replaceSupersessions(supersedingID: String, supersededIDs: [UUID], at date: Date, in db: Database) throws {
+        try db.execute(
+            sql: "DELETE FROM memory_supersessions WHERE superseding_id = ?",
+            arguments: [supersedingID]
+        )
+        let timestamp = DateFormat.iso8601.string(from: date)
+        for supersededID in supersededIDs where supersededID.uuidString != supersedingID {
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO memory_supersessions (superseded_id, superseding_id, created_at) VALUES (?, ?, ?)",
+                arguments: [supersededID.uuidString, supersedingID, timestamp]
             )
         }
     }
@@ -644,12 +836,23 @@ public actor MemoryStore {
         guard !tokens.isEmpty else { return "" }
         return tokens.map { "\"\($0)\"*" }.joined(separator: " ")
     }
+
+    private static func generateHeadline(from content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let periodIndex = trimmed.firstIndex(of: ".") {
+            let sentence = String(trimmed[..<periodIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !sentence.isEmpty && sentence.count <= 120 {
+                return sentence + "."
+            }
+        }
+        return String(trimmed.prefix(120))
+    }
 }
 
 // MARK: - Row decoding
 
 extension Memory {
-    init(row: Row, tags: [String], excludedAgents: [String]) throws {
+    init(row: Row, tags: [String], excludedAgents: [String], supersededBy: [UUID]? = nil, supersedes: [UUID]? = nil) throws {
         guard
             let idString: String = row["id"],
             let id = UUID(uuidString: idString),
@@ -668,10 +871,45 @@ extension Memory {
             id: id,
             type: type,
             title: row["title"],
+            headline: row["headline"],
             content: content,
             tags: tags,
             excludedAgents: excludedAgents,
             source: row["source"],
+            supersededBy: supersededBy,
+            supersedes: supersedes,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    /// Decodes a compact-index row — a projection that deliberately omits the
+    /// `content` BLOB (search/recent). Content is left empty; callers load
+    /// bodies on demand via `MemoryStore.get(ids:)`.
+    init(compactRow row: Row, tags: [String], excludedAgents: [String], supersededBy: [UUID]? = nil, supersedes: [UUID]? = nil) throws {
+        guard
+            let idString: String = row["id"],
+            let id = UUID(uuidString: idString),
+            let typeString: String = row["type"],
+            let type = MemoryType(rawValue: typeString),
+            let createdAtString: String = row["created_at"],
+            let createdAt = DateFormat.iso8601.date(from: createdAtString),
+            let updatedAtString: String = row["updated_at"],
+            let updatedAt = DateFormat.iso8601.date(from: updatedAtString)
+        else {
+            throw MemoryStoreError.decodingFailed
+        }
+        self.init(
+            id: id,
+            type: type,
+            title: row["title"],
+            headline: row["headline"],
+            content: "",
+            tags: tags,
+            excludedAgents: excludedAgents,
+            source: row["source"],
+            supersededBy: supersededBy,
+            supersedes: supersedes,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -681,6 +919,8 @@ extension Memory {
 public enum MemoryStoreError: Error {
     case decodingFailed
     case notFound
+    /// A supersession edge pointed a memory at itself.
+    case invalidSupersession
 }
 
 // MARK: - Date formatting

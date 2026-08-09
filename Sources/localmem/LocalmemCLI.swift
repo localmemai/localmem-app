@@ -14,6 +14,7 @@ struct LocalmemCLI: AsyncParsableCommand {
             AddCommand.self,
             UpdateCommand.self,
             DeleteCommand.self,
+            SupersedeCommand.self,
             SetupCommand.self,
             StatusCommand.self,
             PathCommand.self,
