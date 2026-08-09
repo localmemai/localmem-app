@@ -33,23 +33,33 @@ mkdir -p "$OUT_DIR"
 # name:env-assignments — the app's existing screenshot hooks
 # (LOCALMEM_INITIAL_SECTION, LOCALMEM_SHOW_WIZARD, LOCALMEM_APPEARANCE) pin the
 # state, so nothing here has to click anything.
+#
+# The vault shot opens the coffee memory on purpose: the terminal panel higher
+# up the page shows an agent recalling that same fact, so the two carousels tell
+# one story instead of two.
+#
+# Third field is an optional "min-width max-width" pair, used to pick the right
+# window once a shot opens more than one.
 SHOTS=(
-	"vault:LOCALMEM_INITIAL_SECTION=memories"
-	"overview:LOCALMEM_INITIAL_SECTION=overview"
-	"agents:LOCALMEM_INITIAL_SECTION=agents"
-	"activity:LOCALMEM_INITIAL_SECTION=audit"
-	"connectors:LOCALMEM_INITIAL_SECTION=connectors"
-	"setup:LOCALMEM_SHOW_WIZARD=1"
+	"vault:LOCALMEM_INITIAL_SECTION=memories LOCALMEM_SELECT_TITLE=Coffee:900"
+	"overview:LOCALMEM_INITIAL_SECTION=overview:900"
+	"agents:LOCALMEM_INITIAL_SECTION=agents:900"
+	"activity:LOCALMEM_INITIAL_SECTION=audit:900"
+	"connectors:LOCALMEM_INITIAL_SECTION=connectors:900"
+	"setup:LOCALMEM_SHOW_WIZARD=1:900"
+	"settings:LOCALMEM_INITIAL_SECTION=overview LOCALMEM_SHOW_SETTINGS=1:380 600"
 )
 
 capture_one() {
-	local name="$1" assignment="$2"
+	local name="$1" assignment="$2" title="${3:-}"
 	# Braces are load-bearing: the ellipsis is multibyte, and bash reads its
 	# bytes as part of an unbraced variable name.
 	log "Capturing ${name}…"
 
+	# `assignment` may carry several VAR=VALUE pairs; word-splitting is wanted.
+	# shellcheck disable=SC2086
 	env LOCALMEM_VAULT_DIR="$VAULT_DIR" LOCALMEM_APPEARANCE="$APPEARANCE" \
-		"$assignment" "$BIN/localmem-app" >/dev/null 2>&1 &
+		$assignment "$BIN/localmem-app" >/dev/null 2>&1 &
 	local app_pid=$!
 	# Drop it from the job table so killing it later doesn't print
 	# "Terminated: 15", which reads like a failure in the output.
@@ -57,7 +67,8 @@ capture_one() {
 	sleep "$SETTLE"
 
 	local wid width height
-	if ! read -r wid width height < <(swift "$REPO_ROOT/scripts/windowid.swift" localmem-app); then
+	# shellcheck disable=SC2086
+	if ! read -r wid width height < <(swift "$REPO_ROOT/scripts/windowid.swift" localmem-app $title); then
 		kill "$app_pid" 2>/dev/null || true
 		echo "error: no window found for $name" >&2
 		return 1
@@ -83,7 +94,8 @@ capture_one() {
 }
 
 for shot in "${SHOTS[@]}"; do
-	capture_one "${shot%%:*}" "${shot#*:}"
+	IFS=':' read -r shot_name shot_env shot_title <<<"$shot"
+	capture_one "$shot_name" "$shot_env" "$shot_title"
 done
 
 log "Done. Wrote $(ls -1 "$OUT_DIR"/*.png | wc -l | tr -d ' ') files to web/screenshots/"
