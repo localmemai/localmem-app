@@ -203,33 +203,41 @@ cloud connectors that expose an entire account or drive.
 
 ### Network posture
 
-The product promise is about *plaintext*, but the stronger claim is available
-here and worth keeping: **nothing in Localmem opens a network connection unless
-the user clicks a button that says it will.** This is the complete list of
-outbound connections the app, CLI, and MCP server make:
+The product promise is about *plaintext*, but a stronger claim is available here
+and worth keeping: **the only thing Localmem ever sends anywhere is the question
+"is there a newer version?", and the user decides at setup whether it may even
+ask.** This is the complete list of outbound connections the app, CLI, and MCP
+server make:
 
 | Connection | Made by | Trigger | Sends |
 |---|---|---|---|
-| `api.github.com/repos/localmemai/localmem-app/releases` | App only | User clicks **Check for Updates** | Nothing but the HTTPS request (GitHub sees IP + user agent) |
+| `api.github.com/repos/localmemai/localmem-app/releases` | App only | **Check for Updates**, or once per 24h on launch when the user opted in at setup | Nothing but the HTTPS request (GitHub sees IP + user agent) |
 | The release DMG URL | App only | User clicks **Download Update** | Same |
 
-That's the whole table, and both rows are user-initiated. There is **no periodic
-check, no check on launch, no telemetry, and no analytics** — nothing fires on a
-timer, so there is nothing to opt out of and no setting to explain. The CLI and
-MCP server make no network calls at all.
+That's the whole table. There is **no telemetry and no analytics** — no
+identifier, no counts, no vault metadata, nothing about usage. The CLI and MCP
+server make no network calls at all.
+
+**The automatic check is opt-in at first run**, presented on the wizard's
+"Protect vault & updates" screen alongside the Touch ID choice, and changeable
+in Settings. Two invariants follow, and both are load-bearing:
+
+1. **Nothing fires before the user has answered.** The preference defaults to
+   on, so a launch check that ran before the wizard would fire exactly the
+   request the user was about to decline. `ContentView` runs it only once
+   `seenWizard` is set.
+2. **Off means off.** With the toggle off there is no timer and no launch check;
+   the only connections are the ones behind a button press.
 
 **Any new entry belongs in this table before it ships.** If a change can't be
 written as a row here, it's a change to the product promise and has to be argued
 as one.
 
-Why this is stricter than the norm and worth the strictness: comparable apps all
-check automatically and disclose it — Obsidian checks by default with the off
-switch in Settings → About, Cryptomator's privacy policy discloses that its check
-sends OS version, app version, time, and IP, and Signal auto-updates with no
-opt-out. Any of those would have been defensible. But "no connection without a
-click" needs no policy page, no toggle, and no qualification, and for a product
-whose entire pitch is the vault staying local, an unqualified sentence is worth
-more than the update adoption it costs. The cost is real and named in §12.
+This is stricter than the norm: Obsidian checks by default with the off switch
+buried in Settings → About, Cryptomator's check sends OS version, app version,
+time and IP, and Signal auto-updates with no opt-out at all. Asking once, up
+front, alongside the other trust decision the wizard already makes, costs one
+toggle and means the answer is the user's rather than ours.
 
 ### Vault encryption (planned)
 
@@ -677,13 +685,24 @@ writes. Esc cancels, ⌘S saves.
 Unknown sources hash to one of three muted neutrals. The same color language is
 reused in the audit trail and status bar.
 
-### Status bar & popover
+### Status bar
 
-Always-visible 28pt bar: health dot (green/yellow/red), connected clients (capped
-at 3 + `+N`, each in its source color), relative last-access (ticks every
-second), total memory count, and a `▴` that opens a popover with daemon health,
-DB path/size, connected clients, the last 10 activity rows, and
-Restart-daemon / Open-logs actions.
+Always-visible 52pt footer of five equal-width `StatusSegment` cells, each a
+glyph plus a title and a detail line, driven by `VaultStatusViewModel` polling
+once a second:
+
+| Cell | Shows |
+|---|---|
+| Version & updates | See below — the only interactive cell |
+| Connected Agents | MCP actors seen in the activity log, or "None" |
+| Cloud Sync | Off (CloudKit is future work) |
+| Companion App | Not connected (iPhone companion is future work) |
+| Last Activity | Relative time of the newest access event |
+
+> An earlier design here specified a 28pt bar with a health dot, a capped client
+> list, a memory count, and a `▴` popover carrying daemon health, DB path/size,
+> recent activity, and Restart-daemon / Open-logs actions. None of that shipped;
+> the popover does not exist. The cells above are what the code renders.
 
 ### Version & update cell (footer)
 
@@ -717,11 +736,17 @@ code path (§12).
 
 ### Settings
 
-Tabs: **General** (launch at login, menu bar, theme, re-run setup), **Access
-control** (roster/overrides view), **Data** (DB path, Finder, disk usage, export
-JSON, import, vacuum), **Clients** (the auto-detect grid, re-runnable; per-client
-status, last access, Disconnect / Reconfigure), **About** (version, GitHub,
-feedback).
+Single-page grouped view, opened as a window via the `openSettings` environment
+action — never as a sheet, which produced two Settings at once and a copy with
+no way to dismiss it:
+
+- **Appearance** — theme chips (System, Light, Dark).
+- **Software Updates** — the `autoCheckForUpdates` toggle and a manual
+  **Check Now**.
+- **Vault Storage** — resolved SQLite path, Reveal in Finder.
+- **About & Links** — version, GitHub, Website, Privacy. The privacy link sits
+  here deliberately: this is the screen holding the update toggle, so it is
+  where someone asks what the check actually sends.
 
 ### Keyboard shortcuts
 
@@ -781,8 +806,9 @@ v1 ships a single channel — the **notarized DMG** — and defers the CLI chann
   baked into client configs is unchanged, so registrations survive. The app
   surfaces its version and tells the user when a newer one exists — see
   "Version display & update checking" below.
-- **Deferred:** Homebrew formula + curl script (CLI-only channels), a Homebrew
-  Cask, a ZIP artifact, and Sparkle auto-updates — see the target shape below.
+- **Not planned:** Homebrew formula + curl script (CLI-only channels), a Homebrew
+  Cask, a ZIP artifact, and Sparkle auto-updates. The DMG is the only channel and
+  the only one on the books — see the target shape below.
 
 **Update safety.** User data is never inside the bundle: memories live in
 `~/Library/Application Support/Localmem/`, instruction files in `~/.localmem/`,
@@ -805,13 +831,15 @@ app should not pretend otherwise:
 
 | Channel | Who owns the update | What the app does |
 |---|---|---|
-| DMG (today's only channel) | Us | Manual check + assisted download (below) |
-| Homebrew cask (planned) | Homebrew | Nothing — `brew upgrade` is the contract |
+| DMG (today's only channel) | Us | Opt-in check + assisted download (below) |
+| Homebrew cask (**not planned** — see below) | Homebrew | Nothing — `brew upgrade` would be the contract |
 
-**The check is user-initiated, always.** No launch check, no timer. The user
-clicks the footer cell or **Localmem → Check for Updates…**; the app fetches
-`api.github.com/repos/localmemai/localmem-app/releases`, and that is the only
-circumstance in which it makes the request (§5). Rules:
+**Triggers.** Manual at any time — the footer cell, **Check Now** in Settings, or
+**Localmem → Check for Updates…**. Automatic on launch, at most once per 24h,
+*only* when the user opted in at setup (`autoCheckForUpdates`) and only after the
+wizard has been answered; see §5 for why both conditions are load-bearing. The
+throttle is enforced against `lastUpdateCheckTimestamp` in `checkOnLaunchIfDue`;
+manual checks ignore it. Rules:
 
 - **Fetch the release *list*, not `/releases/latest`.** Same single call, but it
   lets the app scan every release newer than the running version — a security
@@ -819,7 +847,13 @@ circumstance in which it makes the request (§5). Rules:
   whose notes we'd otherwise never read. Cost: filtering `draft` and `prerelease`
   ourselves, which `/releases/latest` does for us.
 - **Comparison is component-wise semver**, never string compare — lexically
-  `1.10.0` sorts below `1.9.0`.
+  `1.10.0` sorts below `1.9.0`. Prerelease and `+build` suffixes are stripped,
+  and a non-numeric component truncates the parse rather than being skipped:
+  dropping it would shift the remainder left and make `1.0.1+build.2` read as
+  `1.0.2`, i.e. newer than the version actually running.
+- **The offered release is the highest by that comparison**, not the first the
+  API returns. GitHub orders by creation date, so a patch backport published
+  after a minor release would otherwise supersede it.
 - **Security fixes are flagged by convention.** Nothing in the API says a release
   was security-relevant, so the release notes carry a `## Security` heading and
   the app greps for it across the intervening releases. This is a release-process
@@ -832,22 +866,47 @@ circumstance in which it makes the request (§5). Rules:
 fetches the DMG, verifies it, then mounts it and quits. The user drags, replaces,
 reopens. What the app must get right:
 
-1. **Verify before opening.** The app downloaded an executable on the user's
-   behalf, so it checks the Gatekeeper verdict on the file
-   (`spctl -a -t open --context context:primary-signature`) before it goes
-   anywhere near Finder. On failure the file is deleted and the user is told
-   plainly — the one path where a modal is the correct amount of friction.
-2. **Quit before the swap, and say so first.** Finder refuses to replace a
+1. **Verify before opening, and *read the verdict*.** The app downloaded an
+   executable on the user's behalf, so it checks the Gatekeeper result on the
+   file (`spctl -a -t open --context context:primary-signature`) before the file
+   goes anywhere near Finder. Running `spctl` and discarding its exit status —
+   which is what shipped first — is worse than not checking, because the UI says
+   "verified" either way. On a non-zero status the image is deleted and there is
+   no path forward from the dialog: the one place where a modal is the correct
+   amount of friction.
+2. **Take the mount point from `hdiutil`, don't assume it.** `attach -plist`
+   reports the real `mount-point`; hardcoding `/Volumes/Localmem` breaks the
+   moment a stale mount pushes macOS to `/Volumes/Localmem 1`, and the user is
+   then sent to drag from the *previous* version's volume. The attach is not
+   run with `-nobrowse` — the volume window is the thing the user drags out of.
+3. **Quit before the swap, and say so first.** Finder refuses to replace a
    running app, so the instructions have to be read while the app is still up.
-   The final dialog states the three steps, then **Quit and Install** mounts the
-   DMG and terminates, leaving the drag-to-Applications window on screen as the
-   reminder.
-3. **Say the memories are safe.** Replacing an app bundle reads as destructive.
+   The final dialog states the three steps, then **Quit and Install** opens the
+   volume and terminates, leaving that window on screen as the reminder.
+4. **Say the memories are safe.** Replacing an app bundle reads as destructive.
    The dialog states that memories live outside the bundle, because that is the
    fear that actually shows up at this moment.
+5. **A prepared update is owned by the release that produced it.** Cancelling,
+   or running a fresh check, detaches the volume and deletes the image.
+   Otherwise "Quit and Install" on a later check happily installs the earlier
+   download.
 
-Abandoning halfway is harmless: the user relaunches the old version and the DMG
-sits in Downloads.
+Abandoning halfway is harmless: the user relaunches the old version, and the
+image and volume are cleaned up.
+
+Both subprocesses run off the main actor. `waitUntilExit()` on `@MainActor`
+froze the UI for the whole of `spctl` plus `hdiutil attach`.
+
+**Where the logic lives.** `localmem-app` has no test target, so anything left
+there can only be checked by running the app against the live API. The decisions
+worth verifying therefore sit in `LocalmemCore/UpdateRelease.swift` —
+`GitHubReleaseInfo` (tag parsing, DMG asset selection, the `## Security`
+predicate), `UpdateDecision.evaluate` (draft/prerelease filtering, highest-by-
+semver selection, the scan across intervening releases), and
+`DiskImageMount.mountPoint` — covered by `UpdateDecisionTests` and
+`DiskImageMountTests`. `UpdateChecker` in the app target is left with the parts
+that are genuinely environmental: the request, the subprocesses, and the UI
+state machine.
 
 **Why not Sparkle.** Sparkle's value is the *install* step — a helper process
 that outlives the app to swap a running bundle, EdDSA verification of the
@@ -860,12 +919,22 @@ all to replace one drag gesture. Revisit only if *silent background* updates eve
 become the goal, which is a different product decision. The GitHub releases API
 is the appcast.
 
-**The accepted cost.** Nobody clicks "check for updates," so real-world update
-adoption will be poor, and a security fix reaches users slowly. Two things
-mitigate it and neither is in the app: the Homebrew cask, where `brew upgrade`
-is a habit users already have, and the release notes / README. If adoption ever
-demonstrably matters more than the §5 claim, the decision to revisit is the
-*automatic check*, not Sparkle.
+**The opt-in check is the whole update story.** With Homebrew not planned and
+Sparkle ruled out, the DMG is the only channel and the in-app check is the only
+mechanism that reaches a user who isn't already watching the repo. Nobody clicks
+"check for updates" unprompted, so the share of users who ever learn a release
+exists is roughly the share who left the wizard toggle on.
+
+Two consequences worth holding onto:
+
+- **The wizard's update screen carries more weight than its size suggests.** It
+  is the only moment the product asks, and the answer governs update reach for
+  the lifetime of that install.
+- **If a security fix ever has to move faster than this, the lever is the
+  check's cadence, not an installer.** Checking on launch regardless of the
+  toggle, or a nag for security-flagged releases specifically, are both smaller
+  changes than Sparkle and address the actual gap. Neither is worth doing
+  pre-emptively.
 
 **Known wrinkle:** an AI client may be running `localmem-mcp` out of the old
 bundle during the swap. Replacing a bundle under a running process is safe on
@@ -875,22 +944,25 @@ risk; worth knowing when triaging "I updated but the version didn't change."
 
 ### Target shape (later releases)
 
-Ship both families of channels — they're different artifacts for different
-audiences:
+**The DMG is the only channel, and there is no second one planned.** Homebrew —
+formula for the CLI, cask for the app — was the obvious candidate and is
+explicitly **not being done now**. Sparkle is ruled out on its own merits. So
+the shape below is what a later release *could* add, not a commitment:
 
-- **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both install
-  `localmem` + `localmem-mcp`.
+- **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both would
+  install `localmem` + `localmem-mcp`.
 - **App:** the DMG **+** a Homebrew **Cask**. No ZIP — nothing consumes one now
   that Sparkle is ruled out.
-- **Updates:** `brew upgrade` for anything installed by Homebrew; the in-app
-  manual check + assisted download for the DMG channel. **Sparkle is not
+- **Updates:** `brew upgrade` for anything Homebrew installed; the in-app
+  opt-in check + assisted download for the DMG channel. **Sparkle is not
   planned** — see "Version display & update checking" above for why.
 - **Skip the PKG** unless the website installer specifically needs to configure
   the CLI without the app touching `/usr/local/bin`.
 
-The **Homebrew cask is the highest-leverage remaining work on updates**, not
-anything in-app: `brew upgrade` is a habit this audience already has, and it
-covers the CLI at the same time.
+If the channel question is reopened, the cask is the one worth doing first:
+`brew upgrade` is a habit this audience already has, it covers the CLI at the
+same time, and it is far cheaper than an in-app installer. But it buys update
+*reach*, which is only worth paying for once reach is the thing hurting.
 
 **Version skew** (a bundled CLI vs. a separate Homebrew CLI) is mitigated by
 setup being idempotent and the app's status view flagging + repairing a stale
@@ -930,9 +1002,9 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
   ranking); append-only supersession edges; two-pass extract → verify on the
   write path (§10); folders with per-folder agent visibility (§8); graceful
   degradation on older macOS.
-- **next** — version cell in the footer with a manual update check and assisted
+- **next** — version cell in the footer with an opt-in update check and assisted
   download (§12); vault-level dedup; folder merge/rename ergonomics as
-  auto-created project folders accumulate; Homebrew channel (formula + cask).
+  auto-created project folders accumulate.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
@@ -956,10 +1028,12 @@ the constraint, retrieval is.
    `LocalmemCore` so CLI, MCP, and GUI agree on source strings.
 4. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
    forever)?
-5. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
-   where release artifacts live (GitHub Releases vs. own CDN). *Settled:* DMG
-   only (no ZIP), Homebrew cask yes, Sparkle no, and update checks are manual
-   only — see §12.
-6. **Update adoption** — the manual-only check trades reach for the unqualified
-   §5 claim. Revisit if a security fix ever needs to land faster than users
-   happen to click; the lever is an automatic check, not an in-place installer.
+5. **Distribution specifics** — where release artifacts live (GitHub Releases
+   vs. own CDN); whether a second channel is ever worth adding, and if so
+   whether the CLI leads with brew or curl. *Settled:* DMG only (no ZIP),
+   Sparkle no, Homebrew not now, and the update check is opt-in at setup —
+   see §12.
+6. **Update adoption** — with no Homebrew channel, the opt-in check is the only
+   thing that reaches a user who isn't watching the repo, so reach is bounded by
+   how many leave the wizard toggle on. Revisit if a security fix has to land
+   faster than that; the lever is the check's cadence, not an installer.

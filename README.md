@@ -61,7 +61,9 @@ search, permissions, and audit behavior:
 - **Import from your files.** Pick Text, Markdown, or PDF files and Localmem
   extracts the key facts into memories — on-device via Apple Intelligence when
   available, otherwise through a CLI agent you already use (Claude Code or
-  Codex). Every candidate fact is then verified against the source document
+  Codex), which sends the text of those files to that agent's provider. You
+  pick the engine before choosing files, and there is no silent fallback
+  between them. Every candidate fact is then verified against the source document
   before anything is stored, and each file shows its "N extracted → M kept"
   tally. You choose every file; nothing is scanned automatically.
 - **One-command setup.** `localmem setup` registers the MCP server with every
@@ -115,7 +117,8 @@ Once setup finishes, restart your AI clients and they'll have Localmem
 available. Try telling one "remember that I prefer flat whites" — then ask a
 fresh session in another project what you like to drink.
 
-Homebrew and a curl installer are planned as additional channels.
+The DMG is currently the only install channel; Homebrew and a curl installer are
+possibilities, not commitments.
 
 ## CLI
 
@@ -149,6 +152,27 @@ app UI, and distribution plan live in the
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Privacy
+
+Your memories never leave your Mac. The app makes exactly two network
+connections, both to GitHub and both about software updates — checking whether a
+newer release exists, and downloading it. The automatic check is opt-in during
+setup and can be turned off; the CLI and MCP server make no network calls at
+all. There is no telemetry, no analytics, and no identifier of any kind.
+
+The one case where content leaves your machine is importing files with an agent
+extraction backend (Claude Code or Codex) instead of the on-device model — you
+choose the backend before selecting files, and there is no silent fallback.
+
+Full detail: [localmem.ai/privacy](https://localmem.ai/privacy), and
+[§5 of the technical design](docs/Technical_Design.md).
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md). Tagging is the release; two steps it can't
+check for you are bumping `LocalmemVersion.current` and giving security releases
+a `## Security` heading, which the app's update check reads.
 
 ## License
 

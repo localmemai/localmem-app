@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy — Localmem</title>
+  <meta name="description" content="Every network connection Localmem makes, listed. Your memories stay on your Mac: there is no Localmem account, no Localmem server, and no telemetry." />
+
+  <meta property="og:title" content="Privacy — Localmem" />
+  <meta property="og:description" content="Every network connection Localmem makes, listed in one table." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://localmem.ai/privacy" />
+  <meta property="og:image" content="https://localmem.ai/logo.svg" />
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/logo.svg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#07080c;color:#e8eaf0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.65}
+    ::selection{background:rgba(53,208,224,0.3)}
+    a{color:#35d0e0;text-decoration:none}
+    a:hover{text-decoration:underline}
+    .wrap{max-width:760px;margin:0 auto;padding:0 28px}
+    h1{font-size:44px;font-weight:800;letter-spacing:-0.025em;line-height:1.1;margin-bottom:14px}
+    h2{font-size:22px;font-weight:700;letter-spacing:-0.015em;margin:44px 0 14px}
+    p{color:#b6bccb;margin-bottom:14px}
+    ul{color:#b6bccb;margin:0 0 14px 20px}
+    li{margin-bottom:7px}
+    strong{color:#e8eaf0;font-weight:600}
+    code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:5px;color:#cfd4e0}
+    table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px}
+    th{text-align:left;font-weight:600;color:#e8eaf0;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.14);vertical-align:top}
+    td{padding:12px;border-bottom:1px solid rgba(255,255,255,0.06);color:#b6bccb;vertical-align:top}
+    .scroller{overflow-x:auto}
+    .note{border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);border-radius:12px;padding:18px 20px;margin:20px 0}
+    .note p:last-child{margin-bottom:0}
+    .lede{font-size:19px;color:#9096a6;margin-bottom:8px}
+  </style>
+</head>
+<body>
+
+<div class="wrap" style="padding-top:38px;padding-bottom:80px">
+
+  <a href="/" style="display:inline-flex;align-items:center;gap:10px;color:inherit;margin-bottom:52px">
+    <img src="/logo.svg" alt="Localmem" width="30" height="30" style="display:block;border-radius:9px" />
+    <span style="font-weight:700;font-size:16px">Localmem</span>
+  </a>
+
+  <h1>Privacy</h1>
+  <p class="lede">Your memories live on your Mac. There is no Localmem account, no Localmem server, and no telemetry.</p>
+
+  <p>Localmem stores everything in a SQLite database under <code>~/Library/Application Support/Localmem/</code>, on your machine. We do not operate a backend that holds your data, so there is nothing for us to read, lose, subpoena, or sell. This page lists every connection the software makes, so you can check that claim rather than take it.</p>
+
+  <h2>What leaves your machine</h2>
+
+  <p>Two connections, both to GitHub, both about software updates:</p>
+
+  <div class="scroller">
+  <table>
+    <thead>
+      <tr><th>Connection</th><th>When</th><th>What it sends</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>api.github.com/…/releases</code></td>
+        <td>When you press <strong>Check for Updates</strong> — or once every 24 hours at launch, if you left automatic checks on during setup</td>
+        <td>Nothing but the request itself. GitHub sees your IP address and the app version in the user agent.</td>
+      </tr>
+      <tr>
+        <td>The release download URL</td>
+        <td>When you press <strong>Download Update</strong></td>
+        <td>The same. This is the same file you would download from the releases page by hand.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>That is the entire list. An update check is a question, not a report: it asks whether a newer version exists and transmits nothing about you beyond what opening any HTTPS connection reveals. The <code>localmem</code> command-line tool and the <code>localmem-mcp</code> server make no network connections at all.</p>
+
+  <div class="note">
+    <p><strong>Automatic checking is your choice, and we ask up front.</strong> The setup wizard offers it on the same screen as Touch ID. Turn it off there — or later in Settings — and no check ever runs on a timer; the only connections left are the ones behind a button you press. Nothing is checked before you have answered that question.</p>
+  </div>
+
+  <h2>Importing files, and AI agents</h2>
+
+  <p>Localmem can read files you select and extract memories from them. How that extraction happens determines whether anything leaves your Mac, so you choose the engine before you choose the files:</p>
+
+  <ul>
+    <li><strong>Apple Foundation Models</strong> (preferred, and the default where supported) runs on-device. Nothing leaves your Mac.</li>
+    <li><strong>A coding agent you have already installed</strong> — Claude Code or Codex — runs the extraction through that tool. <strong>The text of the files you selected is sent to that agent's provider</strong>, under your existing relationship with them and their privacy policy, not ours.</li>
+  </ul>
+
+  <p>Localmem never calls a model API itself and never holds an API key. There is <strong>no silent fallback</strong>: if the on-device model is unavailable, Localmem tells you which agent would read your files and waits for you to agree. Agent extraction runs headless, as a plain text-to-text call with tools disabled and MCP configuration stripped out.</p>
+
+  <h2>What never leaves your machine</h2>
+
+  <ul>
+    <li>The content, titles, and tags of your memories</li>
+    <li>Your folder names, agent names, and visibility rules</li>
+    <li>Your searches, and how many memories you have</li>
+    <li>The access history — which agent read or wrote what, and when</li>
+    <li>File paths, project names, and anything else about your machine</li>
+  </ul>
+
+  <p>There is no analytics package, no crash reporter, no usage counter, and no unique identifier of any kind in Localmem.</p>
+
+  <h2>This website</h2>
+
+  <p>localmem.ai is a static page hosted on Vercel. It sets no cookies, runs no analytics, and embeds no trackers. Vercel keeps standard web-server request logs, which include IP addresses, as any web host does. The fonts on this page are served by Google Fonts, which sees the request that fetches them.</p>
+
+  <h2>Changes to this page</h2>
+
+  <p>The list above is not marketing copy — it is a rule we hold ourselves to in the codebase. Localmem's design document requires that any new network connection be written into that table before it ships, and a change that cannot be described as a row there is treated as a change to the product's promise. You can read the current version in <a href="https://github.com/localmemai/localmem-app/blob/main/docs/Technical_Design.md" target="_blank" rel="noopener">§5 of the technical design</a>, and the source for all of it is <a href="https://github.com/localmemai/localmem-app" target="_blank" rel="noopener">on GitHub</a>.</p>
+
+  <h2>Questions</h2>
+
+  <p>Open an issue at <a href="https://github.com/localmemai/localmem-app/issues" target="_blank" rel="noopener">github.com/localmemai/localmem-app</a>.</p>
+
+  <p style="color:#6b7185;font-size:13.5px;margin-top:44px">Last updated 9 August 2026.</p>
+
+  <div style="border-top:1px solid rgba(255,255,255,0.06);margin-top:44px;padding-top:24px;font-size:13px;color:#6b7185">
+    © 2026 Localmem · <a href="/" style="color:#9096a6">Back to localmem.ai</a>
+  </div>
+
+</div>
+
+</body>
+</html>
