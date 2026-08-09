@@ -1,4 +1,5 @@
 import GRDB
+import Foundation
 
 enum Migrations {
     // ─────────────────────────────────────────────────────────────────────────
@@ -230,6 +231,163 @@ enum Migrations {
                 """)
         }
 
+        migrator.registerMigration("v4_folders") { db in
+            // 1. Create folders table
+            try db.execute(sql: """
+                CREATE TABLE folders (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    project_root TEXT,
+                    sensitive INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """)
+            
+            // 2. Create unique index on project_root
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX idx_folders_root ON folders(project_root) 
+                WHERE project_root IS NOT NULL
+                """)
+            
+            // 3. Create agents table
+            try db.execute(sql: """
+                CREATE TABLE agents (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'all',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """)
+            
+            // 4. Create Inbox folder with fixed UUID
+            let nowStr = DateFormat.iso8601.string(from: Date())
+            try db.execute(
+                sql: """
+                    INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
+                    VALUES (?, ?, ?, NULL, 0, ?, ?)
+                    """,
+                arguments: ["00000000-0000-0000-0000-000000000000", "Inbox", "default", nowStr, nowStr]
+            )
+            
+            // 5. Add folder_id and session_id to memories table
+            try db.execute(sql: "ALTER TABLE memories ADD COLUMN folder_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000' REFERENCES folders(id) ON DELETE SET DEFAULT")
+            try db.execute(sql: "ALTER TABLE memories ADD COLUMN session_id TEXT")
+            
+            // 6. Create index on memories(folder_id)
+            try db.execute(sql: "CREATE INDEX idx_memories_folder ON memories(folder_id)")
+            
+            // 7. Group memories by source folder parent directories
+            let sourceFileRows = try Row.fetchAll(db, sql: """
+                SELECT sm.memory_id, s.path, sm.rel_path
+                FROM source_memories sm
+                JOIN sources s ON sm.source_id = s.id
+                """)
+            
+            var folderPathsToIDs: [String: String] = [:]
+            for row in sourceFileRows {
+                guard let memoryID: String = row["memory_id"],
+                      let basePath: String = row["path"],
+                      let relPath: String = row["rel_path"] else { continue }
+
+                // The files connector stores one source per file, so `path` is
+                // already the full file path and `rel_path` repeats its last
+                // component. Appending regardless would make the file look like
+                // a directory and produce one folder per file — the exact
+                // outcome parent-directory grouping exists to avoid. Only join
+                // when `path` is genuinely a containing directory.
+                let filePath = basePath.hasSuffix(relPath)
+                    ? basePath
+                    : (basePath as NSString).appendingPathComponent(relPath)
+                let parentDir = (filePath as NSString).deletingLastPathComponent
+
+                let folderID: String
+                if let existing = folderPathsToIDs[parentDir] {
+                    folderID = existing
+                } else {
+                    let newID = UUID().uuidString
+                    let folderName = Self.folderName(forDirectory: parentDir)
+                    // Stamp the directory as the folder's canonical path so a
+                    // later import of a sibling file resolves to this folder
+                    // even if the user has renamed it.
+                    try db.execute(
+                        sql: """
+                            INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, 0, ?, ?)
+                            """,
+                        arguments: [newID, folderName, "source", parentDir, nowStr, nowStr]
+                    )
+                    folderPathsToIDs[parentDir] = newID
+                    folderID = newID
+                }
+                
+                try db.execute(
+                    sql: "UPDATE memories SET folder_id = ? WHERE id = ?",
+                    arguments: [folderID, memoryID]
+                )
+            }
+            
+            // 8. Drop memory_agent_exclusions
+            try db.execute(sql: "DROP TABLE memory_agent_exclusions")
+        }
+
+        // Source folders are matched by their directory path, not their display
+        // name — renaming one must not split its next import into a fresh
+        // folder, and two directories sharing a leaf name must not collapse.
+        // Databases that already ran v4 have `project_root` NULL on their source
+        // folders, so recover each folder's directory from the sources its
+        // memories came from.
+        migrator.registerMigration("v5_source_folder_paths") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT m.folder_id AS folder_id, s.path AS path
+                FROM memories m
+                JOIN folders f ON f.id = m.folder_id
+                JOIN source_memories sm ON sm.memory_id = m.id
+                JOIN sources s ON s.id = sm.source_id
+                WHERE f.kind = 'source' AND f.project_root IS NULL
+                """)
+
+            var seen: Set<String> = []
+            for row in rows {
+                guard let folderID: String = row["folder_id"],
+                      let path: String = row["path"],
+                      !seen.contains(folderID) else { continue }
+                let parent = (path as NSString).deletingLastPathComponent
+                guard !parent.isEmpty, parent != "/" else { continue }
+                // The unique index on project_root means a directory already
+                // claimed by another folder must not be written twice.
+                let taken = try Bool.fetchOne(
+                    db,
+                    sql: "SELECT EXISTS (SELECT 1 FROM folders WHERE project_root = ?)",
+                    arguments: [parent]
+                ) ?? false
+                guard !taken else { continue }
+                try db.execute(
+                    sql: "UPDATE folders SET project_root = ? WHERE id = ?",
+                    arguments: [parent, folderID]
+                )
+                seen.insert(folderID)
+            }
+        }
+
         return migrator
+    }
+
+    /// Names a migrated source folder after the directory its files came from.
+    /// A purely numeric leaf ("2026") is meaningless on its own, so it inherits
+    /// its parent — "Apple Health Card/2026" becomes "Apple Health Card 2026".
+    static func folderName(forDirectory path: String) -> String {
+        let leaf = (path as NSString).lastPathComponent
+            .trimmingCharacters(in: .whitespaces)
+        guard !leaf.isEmpty, leaf != "/" else { return "Imported" }
+
+        let isNumeric = !leaf.isEmpty && leaf.allSatisfy(\.isNumber)
+        guard isNumeric else { return leaf }
+
+        let parent = ((path as NSString).deletingLastPathComponent as NSString)
+            .lastPathComponent
+            .trimmingCharacters(in: .whitespaces)
+        return parent.isEmpty ? leaf : "\(parent) \(leaf)"
     }
 }

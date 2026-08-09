@@ -132,6 +132,11 @@ final class ConnectorsViewModel {
         worker = Task { await drain() }
     }
 
+    /// Bumped once each time an import batch finishes, so the shell can react
+    /// — clearing a stale search filter that would otherwise hide the memories
+    /// just imported.
+    private(set) var completedBatches = 0
+
     /// Two files at a time (keeps the on-device model / CLI stable). Stop
     /// cancels the worker: queued files are dropped, in-flight ones finish.
     private func drain() async {
@@ -139,6 +144,7 @@ final class ConnectorsViewModel {
         async let second: Void = workerLoop()
         _ = await (first, second)
         worker = nil
+        completedBatches += 1
         // Fresh task: refresh must run even when the worker was cancelled.
         Task { await refresh() }
     }
@@ -254,8 +260,13 @@ struct ConnectorDetailView: View {
                             source: source,
                             state: vm.states[source.id],
                             isBusy: vm.isBusy(source.id),
-                            isSelected: selection == source.id
-                        ) { selection = source.id }
+                            isSelected: selection == source.id,
+                            onSelect: { selection = source.id },
+                            onDelete: {
+                                if selection == source.id { selection = nil }
+                                Task { await vm.remove(source) }
+                            }
+                        )
                     }
                     if vm.sources.isEmpty {
                         Text("No files imported yet.")
@@ -285,6 +296,10 @@ private struct FileRow: View {
     let isBusy: Bool
     let isSelected: Bool
     let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hovering = false
+    @State private var confirming = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -304,6 +319,9 @@ private struct FileRow: View {
                         .font(.caption).monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
+                RowDeleteButton(visible: hovering, help: "Remove file and its memories") {
+                    confirming = true
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 30)
@@ -314,6 +332,35 @@ private struct FileRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .confirmationDialog("Remove \(source.name)?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Remove", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The file's imported memories are deleted. The file on disk is untouched.")
+        }
+    }
+}
+
+/// Trash affordance shared by every list row: reserved space so rows never
+/// reflow on hover, and it stays reachable by keyboard when not hovered.
+struct RowDeleteButton: View {
+    let visible: Bool
+    var help: String = "Delete"
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash")
+                .font(.system(size: 11))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .opacity(visible ? 1 : 0)
+        .frame(width: 16)
+        .help(help)
+        .accessibilityLabel(help)
     }
 }
 

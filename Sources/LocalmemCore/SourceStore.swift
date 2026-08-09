@@ -130,6 +130,45 @@ public final class SourceStore: Sendable {
 
     // MARK: - Memory links + reconciliation
 
+    /// Find or create the folder for a source's containing directory. `sources`
+    /// holds one row per file, so grouping by the parent directory keeps a
+    /// 60-file import to one folder instead of sixty. New folders are always
+    /// created not sensitive — an import never changes who can read what.
+    static func resolveSourceFolder(sourceID: UUID, in db: Database) throws -> UUID {
+        let inbox = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        guard let path = try String.fetchOne(
+            db, sql: "SELECT path FROM sources WHERE id = ?", arguments: [sourceID.uuidString]
+        ) else { return inbox }
+
+        let parent = (path as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != "/" else { return inbox }
+
+        // Match on the directory path, not the display name. Matching by name
+        // means renaming a folder splits its next import into a fresh
+        // (not sensitive) folder, and two unrelated directories that happen to
+        // share a leaf name — `.../2026/` under two different sources — collapse
+        // into one. `project_root` is the folder's canonical path for both
+        // project and source kinds, and is already uniquely indexed.
+        if let existing = try String.fetchOne(
+            db,
+            sql: "SELECT id FROM folders WHERE project_root = ? LIMIT 1",
+            arguments: [parent]
+        ), let id = UUID(uuidString: existing) {
+            return id
+        }
+
+        let newID = UUID()
+        let now = DateFormat.iso8601.string(from: Date())
+        try db.execute(
+            sql: """
+                INSERT INTO folders (id, name, kind, project_root, sensitive, created_at, updated_at)
+                VALUES (?, ?, 'source', ?, 0, ?, ?)
+                """,
+            arguments: [newID.uuidString, Migrations.folderName(forDirectory: parent), parent, now, now]
+        )
+        return newID
+    }
+
     public func memoryIDs(sourceID: UUID, relPath: String) async throws -> [UUID] {
         try await database.read { db in
             try String.fetchAll(db,
@@ -181,7 +220,14 @@ public final class SourceStore: Sendable {
         actorKind: ActorKind,
         actorID: String? = nil
     ) async throws -> Int {
-        try await database.write { db in
+        // A run that extracted nothing must never destroy the previous set.
+        // An empty result is far more often a backend failure or an unreadable
+        // file than a document that genuinely lost its content, and replace-all
+        // would trade real memories for nothing. Keep what is there and let the
+        // user delete it deliberately.
+        guard !memories.isEmpty else { return 0 }
+
+        return try await database.write { db in
             // Drop this file's old memories (cascades tags/exclusions/links).
             let old = try String.fetchAll(
                 db,
@@ -199,9 +245,17 @@ public final class SourceStore: Sendable {
                 ), in: db)
             }
 
+            // File the new memories under a folder named after the directory
+            // they were imported from, matching what the v4 migration did for
+            // pre-existing imports. Without this every import lands in Inbox,
+            // which is the flat list folders exist to replace.
+            let folderID = try Self.resolveSourceFolder(sourceID: sourceID, in: db)
+
             // Insert the new set and link each memory back to the file.
             var imported = 0
             for memory in memories {
+                var memory = memory
+                memory.folderID = folderID
                 guard try MemoryStore.insertPreservingIdentity(memory, in: db) else { continue }
                 imported += 1
                 try db.execute(

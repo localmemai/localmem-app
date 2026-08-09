@@ -22,7 +22,7 @@ struct SearchCommand: AsyncParsableCommand {
         let store = MemoryStore(database: database)
         let activityStore = ActivityStore(database: database)
 
-        let memories = try await store.search(query: query, limit: limit)
+        let (memories, withheld) = try await store.search(query: query, limit: limit)
         do {
             try await activityStore.add(Activity(
                 actorKind: .cli,
@@ -42,6 +42,9 @@ struct SearchCommand: AsyncParsableCommand {
             try OutputFormatter.printJSON(memories)
         } else {
             OutputFormatter.printTable(memories)
+            if withheld > 0 {
+                print("\n[!] \(withheld) memories withheld due to sensitivity settings.")
+            }
         }
     }
 }

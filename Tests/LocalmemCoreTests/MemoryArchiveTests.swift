@@ -10,7 +10,6 @@ struct MemoryArchiveTests {
             title: "Coffee",
             content: "Flat white, oat milk.",
             tags: ["coffee", "drink"],
-            excludedAgents: ["some-agent"],
             source: "user"
         )
     }
@@ -27,7 +26,6 @@ struct MemoryArchiveTests {
         #expect(m.title == original.title)
         #expect(m.content == original.content)
         #expect(Set(m.tags) == Set(original.tags))
-        #expect(m.excludedAgents == original.excludedAgents)
         #expect(m.source == original.source)
         // Dates survive the ISO-8601 hop to within formatter precision.
         #expect(abs(m.createdAt.timeIntervalSince(original.createdAt)) < 0.001)

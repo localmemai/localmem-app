@@ -122,6 +122,14 @@ struct ToolRegistry: Sendable {
                         "items": ["type": "string"],
                         "description": "Array of memory UUIDs that are superseded and replaced by this new memory.",
                     ],
+                    "project_root": [
+                        "type": "string",
+                        "description": "Optional git repository root path. If omitted, the server resolves it from the parent process's current working directory.",
+                    ],
+                    "session_id": [
+                        "type": "string",
+                        "description": "Optional developer workspace session identifier.",
+                    ],
                 ],
             ]
         )
@@ -422,12 +430,33 @@ struct ToolRegistry: Sendable {
             .compactMap { UUID(uuidString: $0) }
         let headline = args["headline"]?.stringValue
 
+        let resolvedProjectRoot: String?
+        if let root = args["project_root"]?.stringValue, !root.isEmpty {
+            resolvedProjectRoot = root
+        } else if let parentCWD = await ProcessUtility.getParentCWD(),
+                  let gitRoot = ProcessUtility.findGitRoot(from: parentCWD) {
+            resolvedProjectRoot = gitRoot
+        } else {
+            resolvedProjectRoot = nil
+        }
+
+        let folderID: UUID?
+        if let root = resolvedProjectRoot {
+            let folder = try await store.resolveProjectFolder(gitRoot: root)
+            folderID = folder.id
+        } else {
+            folderID = nil
+        }
+        let sessionID = args["session_id"]?.stringValue
+
         let memory = try await store.add(
             content: content,
             type: type,
             title: title,
             headline: headline,
             tags: tags,
+            folderID: folderID,
+            sessionID: sessionID,
             supersedes: supersedes,
             actorKind: .mcp,
             actorID: await identity.name
@@ -488,8 +517,7 @@ struct ToolRegistry: Sendable {
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let includeSuperseded = args["includeSuperseded"]?.boolValue ?? false
         let actorID = await identity.name
-        let memories = try await store.search(query: query, limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
-        let blockedCount = try await store.blockedSearchCount(query: query, limit: limit, requestingAgent: actorID)
+        let (memories, withheld) = try await store.search(query: query, limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
         do {
             try await activityStore.add(Activity(
                 actorKind: .mcp,
@@ -498,13 +526,13 @@ struct ToolRegistry: Sendable {
                 query: query,
                 resultCount: memories.count
             ), memoryIDs: memories.map(\.id))
-            if blockedCount > 0 {
+            if withheld > 0 {
                 try await activityStore.add(Activity(
                     actorKind: .mcp,
                     actorID: actorID,
                     operation: "access_filtered",
                     query: query,
-                    resultCount: blockedCount
+                    resultCount: withheld
                 ))
             }
         } catch {
@@ -513,15 +541,14 @@ struct ToolRegistry: Sendable {
                 "error": String(describing: error),
             ])
         }
-        return .init(content: [.plainText(try memories.toResultEnvelope(withheld: blockedCount))])
+        return .init(content: [.plainText(try memories.toResultEnvelope(withheld: withheld))])
     }
 
     private func handleRecent(_ args: [String: Value]) async throws -> CallTool.Result {
         let limit = Self.clampLimit(args["limit"]?.intValue)
         let includeSuperseded = args["includeSuperseded"]?.boolValue ?? false
         let actorID = await identity.name
-        let memories = try await store.recent(limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
-        let blockedCount = try await store.blockedRecentCount(limit: limit, requestingAgent: actorID)
+        let (memories, withheld) = try await store.recent(limit: limit, requestingAgent: actorID, includeSuperseded: includeSuperseded)
         do {
             try await activityStore.add(Activity(
                 actorKind: .mcp,
@@ -529,12 +556,12 @@ struct ToolRegistry: Sendable {
                 operation: "memory_recent",
                 resultCount: memories.count
             ), memoryIDs: memories.map(\.id))
-            if blockedCount > 0 {
+            if withheld > 0 {
                 try await activityStore.add(Activity(
                     actorKind: .mcp,
                     actorID: actorID,
                     operation: "access_filtered",
-                    resultCount: blockedCount
+                    resultCount: withheld
                 ))
             }
         } catch {
@@ -543,7 +570,7 @@ struct ToolRegistry: Sendable {
                 "error": String(describing: error),
             ])
         }
-        return .init(content: [.plainText(try memories.toResultEnvelope(withheld: blockedCount))])
+        return .init(content: [.plainText(try memories.toResultEnvelope(withheld: withheld))])
     }
 
     /// Partial-update handler — agents pass only the fields they want to

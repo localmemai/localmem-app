@@ -16,7 +16,7 @@ struct MigrationsTests {
         let applied = try await db.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
         }
-        #expect(applied == ["v1_initial", "v2_extraction_counts", "v3_retrieval_and_supersession"])
+        #expect(applied == ["v1_initial", "v2_extraction_counts", "v3_retrieval_and_supersession", "v4_folders", "v5_source_folder_paths"])
     }
 
     @Test("v2 adds the nullable extraction-count columns to source_files")
@@ -38,10 +38,10 @@ struct MigrationsTests {
                 db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"))
         }
         for expected in [
-            "memories", "memory_tags", "memory_agent_exclusions", "memories_fts",
+            "memories", "memory_tags", "memories_fts",
             "activity", "activity_memory",
             "sources", "source_files", "source_memories",
-            "memory_supersessions",
+            "memory_supersessions", "folders", "agents",
         ] {
             #expect(tables.contains(expected), "missing table \(expected)")
         }
@@ -60,7 +60,7 @@ struct MigrationsTests {
             Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"))
         }
         #expect(indexes == [
-            "idx_excl_agent", "idx_memories_created_at",
+            "idx_memories_created_at", "idx_memories_folder", "idx_folders_root",
             "idx_activity_occurred_at", "idx_activity_actor",
             "idx_activity_memory_memory", "idx_source_memories_file",
             "idx_supersessions_superseded", "idx_supersessions_superseding",
@@ -85,7 +85,7 @@ struct MigrationsTests {
         let memory = try await memoryStore.add(
             content: "Launch schema works.", type: .note, tags: ["launch"],
             actorKind: .cli, actorID: "test")
-        #expect(try await memoryStore.search(query: "launch").map(\.id) == [memory.id])
+        #expect(try await memoryStore.search(query: "launch").memories.map(\.id) == [memory.id])
 
         let source = ImportSource(name: "notes.md", path: "/tmp/notes.md", backend: .apple)
         try await sourceStore.add(source)

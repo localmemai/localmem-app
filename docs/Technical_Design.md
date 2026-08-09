@@ -13,7 +13,7 @@
 5. [Security & privacy model](#5-security--privacy-model)
 6. [Search](#6-search)
 7. [MCP server & tools](#7-mcp-server--tools)
-8. [Per-memory agent access control](#8-per-memory-agent-access-control)
+8. [Folders and agent visibility](#8-folders-and-agent-visibility)
 9. [CLI](#9-cli)
 10. [File connector](#10-file-connector)
 11. [macOS app UI](#11-macos-app-ui)
@@ -70,7 +70,9 @@ permissions, access history, and export.
 ## 3. Technology stack
 
 - **Language:** Swift, Swift Package Manager (`swift-tools-version: 6.2`),
-  targeting macOS 26+.
+  deployment target macOS 14. Features that need newer frameworks
+  (FoundationModels / Apple Intelligence extraction) are gated at runtime and
+  degrade to a CLI-agent backend rather than raising the floor.
 - **Storage:** SQLite via [GRDB.swift](https://github.com/groue/GRDB.swift) —
   FTS5, migrations, observation.
 - **CLI:** `swift-argument-parser`.
@@ -96,7 +98,7 @@ public struct Memory: Codable, Identifiable, Sendable {
     public var tags: [String]
     public var source: MemorySource
     public var reviewState: ReviewState
-    public var excludedAgents: [String]   // see §8
+    public var folderID: UUID             // see §8; defaults to Inbox
     public let createdAt: Date
     public var updatedAt: Date
 }
@@ -124,6 +126,11 @@ CREATE TABLE memories (
     content BLOB NOT NULL,
     source TEXT NOT NULL,
     review_state TEXT NOT NULL,
+    -- Fixed sentinel = Inbox, so a stale binary that knows nothing about
+    -- folders still writes valid rows instead of violating NOT NULL.
+    folder_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'
+        REFERENCES folders(id) ON DELETE SET DEFAULT,
+    session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -135,12 +142,24 @@ CREATE TABLE memory_tags (
     FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
 );
 
-CREATE TABLE memory_agent_exclusions (
-    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    agent_id  TEXT NOT NULL,
-    PRIMARY KEY (memory_id, agent_id)
+CREATE TABLE folders (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    kind         TEXT NOT NULL,   -- default | project | source | manual
+    project_root TEXT,            -- git root, for kind='project'
+    sensitive    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
 );
-CREATE INDEX idx_excl_agent ON memory_agent_exclusions(agent_id);
+CREATE UNIQUE INDEX idx_folders_root ON folders(project_root)
+    WHERE project_root IS NOT NULL;
+
+CREATE TABLE agents (
+    id         TEXT PRIMARY KEY,  -- canonical actor_id
+    status     TEXT NOT NULL DEFAULT 'all',  -- all | non_sensitive_only
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE VIRTUAL TABLE memories_fts USING fts5(
     title,
@@ -150,10 +169,10 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
 );
 ```
 
-Tags and exclusions are written/replaced inside the same write transaction as
-the memory, and populated on read via batched attach helpers (`attachTags`,
-`attachExclusions`). `ON DELETE CASCADE` drops a memory's tag and exclusion rows
-with it.
+Tags are written/replaced inside the same write transaction as the memory and
+populated on read via a batched attach helper. `ON DELETE CASCADE` drops a
+memory's tag rows with it. Deleting a folder reassigns its memories to `Inbox`
+rather than deleting them.
 
 > **Migrations during development.** While Localmem is pre-release we do not add
 > new migrations — schema changes go **inside the existing `v1_initial` block**
@@ -181,6 +200,36 @@ files and archives from a newer `schemaVersion` with a clear message.
 Localmem should not require a Localmem-operated server to access user plaintext.
 It should also provide better visibility and tighter access control than broad
 cloud connectors that expose an entire account or drive.
+
+### Network posture
+
+The product promise is about *plaintext*, but the stronger claim is available
+here and worth keeping: **nothing in Localmem opens a network connection unless
+the user clicks a button that says it will.** This is the complete list of
+outbound connections the app, CLI, and MCP server make:
+
+| Connection | Made by | Trigger | Sends |
+|---|---|---|---|
+| `api.github.com/repos/localmemai/localmem-app/releases` | App only | User clicks **Check for Updates** | Nothing but the HTTPS request (GitHub sees IP + user agent) |
+| The release DMG URL | App only | User clicks **Download Update** | Same |
+
+That's the whole table, and both rows are user-initiated. There is **no periodic
+check, no check on launch, no telemetry, and no analytics** — nothing fires on a
+timer, so there is nothing to opt out of and no setting to explain. The CLI and
+MCP server make no network calls at all.
+
+**Any new entry belongs in this table before it ships.** If a change can't be
+written as a row here, it's a change to the product promise and has to be argued
+as one.
+
+Why this is stricter than the norm and worth the strictness: comparable apps all
+check automatically and disclose it — Obsidian checks by default with the off
+switch in Settings → About, Cryptomator's privacy policy discloses that its check
+sends OS version, app version, time, and IP, and Signal auto-updates with no
+opt-out. Any of those would have been defensible. But "no connection without a
+click" needs no policy page, no toggle, and no qualification, and for a product
+whose entire pitch is the vault staying local, an unqualified sentence is worth
+more than the update adoption it costs. The cost is real and named in §12.
 
 ### Vault encryption (planned)
 
@@ -243,8 +292,10 @@ and audit logging.
   deliberately excluded from the pre-authorized tool set so clients prompt on
   each call.
 
-MCP responses use an agent-facing DTO and **do not** encode `excludedAgents` —
-the denylist is admin metadata for the CLI/app, not for arbitrary MCP clients.
+MCP responses use an agent-facing DTO and **do not** encode folder identity or
+sensitivity — that is admin metadata for the CLI/app, not for arbitrary MCP
+clients. What a restricted agent does get is the `accessNote` (§8): the fact that
+results were withheld, without the shape of what was withheld.
 
 ### Setup & registration
 
@@ -261,83 +312,139 @@ Setup is **idempotent** ("whoever ran setup last wins") and registers its own
 sibling `localmem-mcp`. Supported clients: **Claude Code, Claude Desktop, Cursor,
 Codex, Antigravity.**
 
-## 8. Per-memory agent access control
+## 8. Folders and agent visibility
 
-Let the user decide, **per memory, which agents may see it**. Not every agent
-should be trusted with every personal fact. This is an **organizational
-boundary, not a security wall** (see Non-goals).
+Every memory belongs to **exactly one folder**. The folder decides which agents
+may read it. Everything defaults open, so the feature is invisible until a user
+marks a folder.
+
+This is an **organizational boundary, not a security wall** (see Non-goals).
+
+### The whole rule
+
+A folder is **sensitive** or **not sensitive** (default). An agent is **all**
+(default) or **non-sensitive only**. An agent set to non-sensitive only skips
+sensitive folders. Nothing else.
+
+Because visibility lives on the folder, a memory carries no visibility state of
+its own. Moving a memory between folders *is* how it is reclassified — so there
+is no per-memory override and no inherited-versus-explicit distinction to
+reconcile.
+
+**The destination's rule always wins**, in both directions, for a single memory
+and for a whole folder merged into another. A move never rewrites the
+destination's own setting: doing so would change visibility for memories already
+filed there that the user never touched. Because a move can therefore widen or
+narrow who can read something, the app states the outcome before committing —
+and stays silent when the move crosses no boundary, so ordinary tidying does not
+nag. The one exception is a merge destination that does not exist yet: with no
+rule to respect, it inherits sensitivity from its sources rather than defaulting
+open and widening access unannounced.
+
+Dragging is the single gesture for both jobs — a memory onto a folder
+reclassifies it, a folder onto a folder merges them.
 
 ### Settled decisions
 
 | Decision | Choice |
 |---|---|
-| Granularity | Per **memory**, per **agent** (not tiers, not categories) |
-| Default | **Open** — every agent has access unless excluded |
-| Storage shape | **Denylist** — persist only the *exclusions*, never the grants |
+| Granularity | Per **folder**, per **agent status** (not per memory) |
+| Hierarchy | **Flat** — no nesting |
+| Membership | Every memory in exactly one folder; no unfiled state |
+| Default folder | `Inbox`, at a fixed sentinel UUID; permanently not sensitive, cannot be renamed or deleted |
+| Defaults | Folders not sensitive; agents `all`, including agents installed later |
 | Enforcement surface | **MCP only** — CLI and app are admin surfaces and bypass |
-| Edit points | At create and update, via checkboxes (all ticked by default) |
 | Identity | Self-declared `actor_id`; not hardened |
 
-**Why denylist, not allowlist.** "Default open" must keep its promise when a
-*new* agent appears after a memory was written. Storing the allowed set would
-freeze the roster as of write time and silently exclude any agent wired up later.
-Storing only exclusions means the empty set is "everyone, including future
-agents," and unticking a box records an exception. It is also strictly less data.
+**Why this replaced per-memory denylists.** The previous design stored one
+exclusion per memory per agent. That cost one decision per memory per agent — a
+cost that grows with the product's own success, which is why the feature went
+unused. Folders collapse it to one decision per folder, applying to memories that
+do not exist yet.
+
+**Why `Inbox` is immutable.** It guarantees a safe home always exists and that a
+user cannot accidentally hide their entire vault. Its controls are disabled in
+the UI rather than hidden — a missing control reads as a bug — with the reason
+stated and an exit ("move them to another folder").
+
+**Why new agents default to `all`.** The reverse produces a worse failure: a
+newly installed tool that silently retrieves nothing, with no visible cause.
+An unknown `actor_id` resolves to `all` without needing a registration step.
+
+### How memories reach a folder
+
+| Origin | Folder |
+|---|---|
+| Agent writing in a project | The project's folder, keyed on **git root path** (not repo name, or `~/work/acme/api` and `~/personal/api` collide). Created on first write. |
+| Agent with no project | `Inbox` |
+| Document import | A folder named after the source's **parent directory** — `sources` holds one row per file, so grouping per source would turn a 60-file import into 60 folders |
+| Manual entry (app/CLI) | User picks; defaults to `Inbox` |
+
+Auto-created folders are always **not sensitive**. Nothing prompts, blocks, or
+infers sensitivity from content.
 
 ### Non-goals
 
 - **Not a security boundary.** Agent identity is the self-declared `actor_id`
   (from `clientInfo` during MCP `initialize`, falling back to
   `LOCALMEM_CLIENT_ID`; see `MCPClientIdentity`). A misbehaving agent can claim
-  another's name. Hardening identity (per-client tokens at registration) is a
-  possible later, separate effort.
-- **No per-operation granularity.** Exclusion is binary — an excluded agent sees
-  the memory in neither read nor search. Read-only vs. read-write per memory is
-  not modeled.
+  another's name. The honest promise is *"restricted agents stay in their
+  lane"* — it stops a trusted but overbroad tool from surfacing memories, and is
+  not a defence against a malicious local process. Neither UI copy nor
+  documentation should imply otherwise. Hardening identity (a per-client secret
+  provisioned at setup and verified server-side) is a possible later, separate
+  effort; `localmem setup` already writes and merges keys into each client's MCP
+  config block, so the mechanism exists.
+- **Grouping does not scope retrieval by default.** It scopes retrieval only
+  where the user has explicitly marked a folder sensitive *and* explicitly
+  restricted an agent. Both are deliberate acts; either alone changes nothing.
+  Scoping by *project context* was considered and cut — it fragments the
+  cross-project recall that is the product's core thesis. Sensitivity is
+  orthogonal to project: an agent set to `all` retains complete cross-project
+  recall no matter how many folders exist.
+- **No per-operation granularity.** Visibility is binary — a hidden memory is
+  hidden in read and search alike.
 - **No multi-user / auth.** Localmem stays single-user and local.
 
 ### Agent roster
 
-The checkbox roster reuses the same agent universe that powers the connection-
-status UI:
-
-- **Universe:** the `KnownAgents` catalog — Claude Code, Claude Desktop, Cursor,
-  Codex, Antigravity. Each entry's `id` is the canonical `actor_id`.
-  `KnownAgents` should live in `LocalmemCore` so IDs stay canonical across CLI,
-  MCP, and app.
-- **Liveness:** derived from `ActivityStore` — an agent is "connected" when its
-  newest activity row is within a 300s window. Shown only as an affordance
-  ("● connected"); it does not affect editability.
-
-Agents that have acted but aren't in `KnownAgents` keep default-open access until
-the catalog (or an "observed unknown agents" UI) grows to cover them.
+The status list reuses the same agent universe that powers the connection-status
+UI: the `KnownAgents` catalog in `LocalmemCore` — Claude Code, Claude Desktop,
+Cursor, Codex, Antigravity — whose `id` is the canonical `actor_id`. Liveness
+comes from `ActivityStore` (newest activity row within a 300s window) and is an
+affordance only; it does not affect editability.
 
 ### Enforcement seam
 
-The read methods on `MemoryStore` — `search`, `recent`, `get`, `findIDs` — take
-an optional caller identity:
+The read methods on `MemoryStore` — `search`, `recent`, `get`, `get(ids:)`,
+`findIDs` — take an optional caller identity:
 
 ```swift
 func search(query: String, limit: Int = 20,
-            requestingAgent: String? = nil) async throws -> [Memory]
+            requestingAgent: String? = nil) async throws
+    -> (memories: [Memory], withheld: Int)
 ```
 
 - `requestingAgent == nil` → **no filtering** (CLI/app admin bypass).
-- `requestingAgent == "<id>"` → exclude any memory with a matching row in
-  `memory_agent_exclusions`, via a `NOT EXISTS` / anti-join in SQL (filtering in
-  the query, not in Swift).
+- `requestingAgent == "<id>"` → resolve the agent's status, then join `folders`
+  and keep rows where `folders.sensitive = 0 OR status = 'all'` — filtering in
+  the query, not in Swift.
 
 | Caller | `requestingAgent` |
 |---|---|
-| MCP `memory_search` / `memory_recent` / `memory_update` readback | `await identity.name` |
+| MCP `memory_search` / `memory_recent` / `memory_get` / `memory_update` readback | `await identity.name` |
 | CLI commands | `nil` (bypass) |
 | App view models | `nil` (bypass) |
 
 `memory_update` reads the existing memory through the **filtered** path before
-writing, so an excluded agent cannot edit what it cannot see;
-`get(id:requestingAgent:)` returns `nil` for an excluded agent so update-by-id
-can't peek around the filter. After writing, the store returns the updated row
-from inside the write transaction without re-applying the read filter.
+writing, so a restricted agent cannot edit what it cannot see, and
+`get(id:requestingAgent:)` returns `nil` so update-by-id can't peek around the
+filter.
+
+A restricted agent is still **told** that results were held back: the result
+envelope carries an `accessNote`, and an `access_filtered` activity row records
+the count. Silently returning less would teach the agent the fact does not exist
+rather than that it cannot see it.
 
 ## 9. CLI
 
@@ -361,8 +468,8 @@ The `localmem` command is the pro-user and debugging surface. It shares
 
 Import memories from files the user deliberately picks — implemented; this
 section is the source of truth (it absorbed `File_Connector_Design.md` and,
-once implemented, `Extraction_Quality_Design.md`). The planned Obsidian
-connector lives in [Obsidian_Connector_Design.md](Obsidian_Connector_Design.md).
+once implemented, `Extraction_Quality_Design.md`). Additional input connectors
+(Obsidian, Apple Notes) were cut — see §13 Out of scope.
 
 ### Model
 
@@ -509,21 +616,46 @@ clients are configured). Modal, dismissible only by Quit or Finish. Five steps
    turns green on a successful `memory_store`. Retry/Skip if no connection in 5s.
 5. **You're set** — summary of location, clients, test result.
 
-### Sidebar (240pt)
+### Memories navigator (300pt)
 
-Search field (Cmd-F, live FTS), horizontally scrollable tag chips (`[all ▾]`
-multi-select placeholder), and a tight memory list — title + source dot (§ below)
-+ optional type line, no preview text. Untitled memories fall back to the first
-~40 chars of content, italicized. Right-click: Open / Edit / Duplicate / Copy ID
-/ Delete. ⌘-click multi-select for bulk delete.
+A Finder/VS Code style **tree**: folders at the top level, their memories nested
+beneath, with a disclosure chevron that toggles independently of selection (so a
+folder can be opened without navigating away from what is being read). `Inbox`
+sorts first; the rest alphabetically.
+
+Sensitivity is marked on the folder row itself — an orange lock rather than a
+folder glyph — so a restricted folder reads at a glance without opening
+settings. Every row carries a hover-revealed delete button whose space is
+reserved, so rows do not reflow as the pointer crosses them.
+
+Folder children are loaded **per folder on expand**, not filtered out of the
+search/recent window — a folder outside that window would otherwise show a
+correct count above an empty body. Selection and expansion persist across
+launches, skipping folders that no longer exist.
+
+While a search is active the tree mirrors the results: counts become match
+counts and matching folders auto-expand, but every folder stays listed (dimmed
+when it has no matches). Hiding rows outright makes a working filter look like
+data loss. A completed import clears the search, since it would otherwise file
+new memories behind a filter that hides them.
 
 ### Detail pane
 
 Selected memory: inline-editable title (double-click); metadata strip
 (`● Source · type · created · updated`, hover for absolute times); wrapping
 content (click-to-focus, saves on blur or ⌘S); tag chips (`+` to add, Backspace
-removes last); action bar (`Edit`, `Delete` with confirm, `Audit trail`, and
-`Access…`). Empty state prompts ⌘N.
+removes last); action bar (`Edit`, `Delete` with confirm, `Audit trail`). The
+metadata strip leads with the memory's folder, orange when sensitive.
+
+The action bar **flows with the content** rather than pinning to the pane's
+bottom edge — a two-line memory in a tall window otherwise strands its buttons
+far below the thing they act on. Empty state prompts ⌘N.
+
+Selecting a folder instead of a memory shows **folder settings** in the same
+pane: name, project path, and a "Who can read this" control. `Inbox`'s controls
+are disabled rather than hidden, with the reason stated. Marking a folder
+sensitive while no agent is restricted says so, rather than implying protection
+that is not in effect.
 
 **Audit trail** slides in a 320pt right inspector, grouping `ActivityStore` rows
 for the memory by day, with **Export CSV** and a confirm-gated **Clear log**
@@ -532,11 +664,10 @@ for the memory by day, with **Export CSV** and a confirm-gated **Clear log**
 ### Add / edit memory sheet
 
 Modal (~560×480). Fields: Title, Type (dropdown), Content (Save disabled until
-non-empty), Tags. **Agent access** disclosure row — "All agents" by default,
-expands to a checklist of `KnownAgents` (all ticked; unticking persists an
-exclusion; "● connected" dot shows liveness). Copy: *"Unchecked agents can't see
-this memory over MCP. You (CLI and this app) always can."* Source is hard-coded
-to `.user` for GUI writes. Esc cancels, ⌘S saves.
+non-empty), Tags, and **Folder** (defaults to the selected folder, else `Inbox`).
+Visibility is not set here — it belongs to the folder, so moving a memory between
+folders is how it is reclassified. Source is hard-coded to `.user` for GUI
+writes. Esc cancels, ⌘S saves.
 
 ### Source color coding
 
@@ -554,6 +685,36 @@ second), total memory count, and a `▴` that opens a popover with daemon health
 DB path/size, connected clients, the last 10 activity rows, and
 Restart-daemon / Open-logs actions.
 
+### Version & update cell (footer)
+
+The shipped footer is a 52pt bar of five equal `StatusSegment` cells
+(`LocalmemApp.swift`). The leftmost cell showed vault lock state — `Locked` /
+`Unlocked` with `Touch ID required` / `Touch ID on` — which was the bar's weakest
+cell twice over: the top toolbar already carries the lock *action*, and when the
+vault is locked a full-window `LockScreen` covers the content area, so the cell
+announced "Locked" beside a floor-to-ceiling lock screen. Nothing was learnable
+there. It becomes the version and update cell.
+
+Same `StatusSegment` shape, so no other cell moves. Three states:
+
+| State | Glyph | Title | Detail |
+|---|---|---|---|
+| Idle | `checkmark.seal`, secondary | `Localmem 1.0.1` | `Check for updates` |
+| Checking | `checkmark.seal`, secondary | `Localmem 1.0.1` | `Checking…` |
+| Up to date | `checkmark.seal`, green | `Localmem 1.0.1` | `Up to date` |
+| Check failed | `checkmark.seal`, secondary | `Localmem 1.0.1` | `Check failed` |
+| Update available | `arrow.down.circle.fill`, accent | `Update available` | `1.1.0 — Download` |
+
+The cell is clickable in every state; clicking runs the check (or, in the last
+state, reopens the dialog). Bottom-left is where users already look for a version
+string, and it makes bug reports legible without asking anyone to find an About
+panel. Lock state is not replaced by anything: it was never information the user
+lacked.
+
+The same action is bound to **Localmem → Check for Updates…** in the app menu,
+which is where Mac users reach for it first. Both entry points call the same
+code path (§12).
+
 ### Settings
 
 Tabs: **General** (launch at login, menu bar, theme, re-run setup), **Access
@@ -569,14 +730,13 @@ feedback).
 
 ### Reconciliation note
 
-An earlier **UI-only** access prototype (`MemoryCategory`,
-`AccessLevel = noAccess/askFirst/readOnly/readWrite`, an `AccessRulesView`
-category×agent matrix) modeled category-level, 4-state rules and is **not
-compatible** with the per-memory binary denylist (§8). Resolution: adopt the
-denylist as the real model, retire `MemoryCategory`/`AccessLevel`, and repurpose
-the Access Rules page as a **roster view** rather than a rules editor. Keep the
-`AgentSnapshot` / `KnownAgents` / connection-status plumbing — it's reused for the
-checkbox roster.
+Two earlier access models were tried and retired. A **UI-only** prototype
+(`MemoryCategory`, `AccessLevel = noAccess/askFirst/readOnly/readWrite`, a
+category×agent matrix) modeled 4-state rules; the shipped v1 replaced it with a
+per-memory binary denylist. Both were superseded by folders (§8) for the same
+reason: their configuration cost scaled with the number of memories, so neither
+survived a growing vault. `AgentSnapshot` / `KnownAgents` / connection-status
+plumbing is kept — it backs the agent status list.
 
 ## 12. Distribution & packaging
 
@@ -618,7 +778,9 @@ v1 ships a single channel — the **notarized DMG** — and defers the CLI chann
   administrator prompt via osascript when `/usr/local/bin` isn't user-writable).
 - **Updates:** **re-download** — the user drags a new DMG over the old app.
   Because the app stays at `/Applications/Localmem.app`, the `localmem-mcp` path
-  baked into client configs is unchanged, so registrations survive.
+  baked into client configs is unchanged, so registrations survive. The app
+  surfaces its version and tells the user when a newer one exists — see
+  "Version display & update checking" below.
 - **Deferred:** Homebrew formula + curl script (CLI-only channels), a Homebrew
   Cask, a ZIP artifact, and Sparkle auto-updates — see the target shape below.
 
@@ -628,6 +790,89 @@ and client configs in each client's own file. An install or update only ever
 replaces the binaries under `Localmem.app`, so memories and configs are preserved
 by construction.
 
+### Version display & update checking
+
+**Where the version comes from.** `LocalmemVersion.current`
+([`Sources/LocalmemCore/LocalmemVersion.swift`](../Sources/LocalmemCore/LocalmemVersion.swift)),
+not `CFBundleShortVersionString`. The release workflow already fails the build
+when the constant doesn't equal the `vX.Y.Z` tag, so the constant *is* the
+released version — and unlike the Info.plist it exists in `swift run` dev builds,
+which have no bundle at all. One string, already CI-enforced, already shared by
+`localmem --version` and the MCP `initialize` response.
+
+**Policy is per channel, not per app.** The audiences update differently and the
+app should not pretend otherwise:
+
+| Channel | Who owns the update | What the app does |
+|---|---|---|
+| DMG (today's only channel) | Us | Manual check + assisted download (below) |
+| Homebrew cask (planned) | Homebrew | Nothing — `brew upgrade` is the contract |
+
+**The check is user-initiated, always.** No launch check, no timer. The user
+clicks the footer cell or **Localmem → Check for Updates…**; the app fetches
+`api.github.com/repos/localmemai/localmem-app/releases`, and that is the only
+circumstance in which it makes the request (§5). Rules:
+
+- **Fetch the release *list*, not `/releases/latest`.** Same single call, but it
+  lets the app scan every release newer than the running version — a security
+  fix released in 1.1.0 still has to be reported to someone jumping 1.0.1 → 1.3.0,
+  whose notes we'd otherwise never read. Cost: filtering `draft` and `prerelease`
+  ourselves, which `/releases/latest` does for us.
+- **Comparison is component-wise semver**, never string compare — lexically
+  `1.10.0` sorts below `1.9.0`.
+- **Security fixes are flagged by convention.** Nothing in the API says a release
+  was security-relevant, so the release notes carry a `## Security` heading and
+  the app greps for it across the intervening releases. This is a release-process
+  rule: it must be written at tag time or the signal is silently absent.
+- **Failure is visible but quiet** — the cell reads `Check failed`. The user
+  asked a question, so they get an answer; they didn't ask for a modal.
+- **The unauthenticated rate limit** (60/hr/IP) is irrelevant for a manual action.
+
+**Assisted download, not in-place install.** On **Download Update** the app
+fetches the DMG, verifies it, then mounts it and quits. The user drags, replaces,
+reopens. What the app must get right:
+
+1. **Verify before opening.** The app downloaded an executable on the user's
+   behalf, so it checks the Gatekeeper verdict on the file
+   (`spctl -a -t open --context context:primary-signature`) before it goes
+   anywhere near Finder. On failure the file is deleted and the user is told
+   plainly — the one path where a modal is the correct amount of friction.
+2. **Quit before the swap, and say so first.** Finder refuses to replace a
+   running app, so the instructions have to be read while the app is still up.
+   The final dialog states the three steps, then **Quit and Install** mounts the
+   DMG and terminates, leaving the drag-to-Applications window on screen as the
+   reminder.
+3. **Say the memories are safe.** Replacing an app bundle reads as destructive.
+   The dialog states that memories live outside the bundle, because that is the
+   fear that actually shows up at this moment.
+
+Abandoning halfway is harmless: the user relaunches the old version and the DMG
+sits in Downloads.
+
+**Why not Sparkle.** Sparkle's value is the *install* step — a helper process
+that outlives the app to swap a running bundle, EdDSA verification of the
+artifact, privilege escalation when `/Applications` isn't user-writable, and the
+long tail of interrupted downloads and quarantine attributes. None of that is
+needed when the user performs the swap. Adopting it would mean an EdDSA key pair
+in repo secrets, a hosted `appcast.xml`, a `sign_update` step in CI, and
+threading `Sparkle.framework` through the inside-out signing in `build-dmg.sh` —
+all to replace one drag gesture. Revisit only if *silent background* updates ever
+become the goal, which is a different product decision. The GitHub releases API
+is the appcast.
+
+**The accepted cost.** Nobody clicks "check for updates," so real-world update
+adoption will be poor, and a security fix reaches users slowly. Two things
+mitigate it and neither is in the app: the Homebrew cask, where `brew upgrade`
+is a habit users already have, and the release notes / README. If adoption ever
+demonstrably matters more than the §5 claim, the decision to revisit is the
+*automatic check*, not Sparkle.
+
+**Known wrinkle:** an AI client may be running `localmem-mcp` out of the old
+bundle during the swap. Replacing a bundle under a running process is safe on
+macOS — the open inode survives — and the next spawn picks up the new binary, so
+a long-lived agent session keeps the old MCP server until it restarts. No data
+risk; worth knowing when triaging "I updated but the version didn't change."
+
 ### Target shape (later releases)
 
 Ship both families of channels — they're different artifacts for different
@@ -635,12 +880,17 @@ audiences:
 
 - **CLI:** Homebrew formula (primary) **+** curl script (fallback). Both install
   `localmem` + `localmem-mcp`.
-- **App:** the DMG **+** a ZIP for Sparkle, **and** a Homebrew **Cask**.
-- **Updates:** **Sparkle** for the app (appcast XML hosted at
-  `localmem.ai/appcast.xml`, EdDSA-signed releases; in-place swap keeps the
-  `/Applications` path stable); `brew upgrade` / re-run curl for the CLI.
+- **App:** the DMG **+** a Homebrew **Cask**. No ZIP — nothing consumes one now
+  that Sparkle is ruled out.
+- **Updates:** `brew upgrade` for anything installed by Homebrew; the in-app
+  manual check + assisted download for the DMG channel. **Sparkle is not
+  planned** — see "Version display & update checking" above for why.
 - **Skip the PKG** unless the website installer specifically needs to configure
   the CLI without the app touching `/usr/local/bin`.
+
+The **Homebrew cask is the highest-leverage remaining work on updates**, not
+anything in-app: `brew upgrade` is a habit this audience already has, and it
+covers the CLI at the same time.
 
 **Version skew** (a bundled CLI vs. a separate Homebrew CLI) is mitigated by
 setup being idempotent and the app's status view flagging + repairing a stale
@@ -674,14 +924,15 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 ## 13. Roadmap
 
 - **v1.0 (shipped)** — macOS vault app (SwiftUI), local storage, MCP adapter,
-  per-memory access control, file connector (§10), signed + notarized DMG via
-  the tag-triggered release pipeline (§12).
-- **v1.1** — extraction quality: two-pass extract → verify + eval harness
-  (§10) — **implemented**; remaining: on-device guided generation +
-  chunking, vault-level dedup. Obsidian connector
-  ([design](Obsidian_Connector_Design.md)).
-- **v1.2** — Homebrew channel, Sparkle updates; improved tagging and
-  organization.
+  file connector (§10), signed + notarized DMG via the tag-triggered release
+  pipeline (§12).
+- **v2.0 (shipped)** — split retrieval (compact index + `memory_get`, BM25
+  ranking); append-only supersession edges; two-pass extract → verify on the
+  write path (§10); folders with per-folder agent visibility (§8); graceful
+  degradation on older macOS.
+- **next** — version cell in the footer with a manual update check and assisted
+  download (§12); vault-level dedup; folder merge/rename ergonomics as
+  auto-created project folders accumulate; Homebrew channel (formula + cask).
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
@@ -690,21 +941,25 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 
 Windows/Linux; Mac App Store (sandbox-incompatible); enterprise MDM; multi-user /
 auth; hardened agent identity; semantic / vector retrieval; memory version
-history beyond the audit log.
+history beyond the audit log. Also cut: routing retrieval by working directory
+(fragments cross-project recall — see §8 Non-goals); additional input surfaces
+(Obsidian/Apple Notes connectors, global hotkeys, share sheets) — input is not
+the constraint, retrieval is.
 
 ## 14. Open questions
 
 1. **Search-index confidentiality** — encrypted FTS index, in-memory rebuild on
    unlock, or documented-tradeoff plaintext index?
-2. **Filtered-result signaling** — should `memory_search` / `memory_recent`
-   signal that results were hidden by access rules ("3 memories hidden"), or stay
-   silent? (Silent is simpler and matches "organizational boundary.")
-3. **Daemon ownership** — should the GUI manage `localmem-mcp` via a LaunchAgent
+2. **Daemon ownership** — should the GUI manage `localmem-mcp` via a LaunchAgent
    (so "quit the app, daemon stops"), or assume the wizard configured it?
-4. **Source-string normalization** — a canonical `KnownClient` enum in
+3. **Source-string normalization** — a canonical `KnownClient` enum in
    `LocalmemCore` so CLI, MCP, and GUI agree on source strings.
-5. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
+4. **Audit-log retention** — unbounded, or a Data-tab setting (30d / 90d /
    forever)?
-6. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
-   DMG vs. ZIP; Homebrew cask yes/no; commit to Sparkle for v1 or ship
-   re-download-only; where release artifacts live (GitHub Releases vs. own CDN).
+5. **Distribution specifics** — primary CLI channel (brew vs. curl vs. both);
+   where release artifacts live (GitHub Releases vs. own CDN). *Settled:* DMG
+   only (no ZIP), Homebrew cask yes, Sparkle no, and update checks are manual
+   only — see §12.
+6. **Update adoption** — the manual-only check trades reach for the unqualified
+   §5 claim. Revisit if a security fix ever needs to land faster than users
+   happen to click; the lever is an automatic check, not an in-place installer.

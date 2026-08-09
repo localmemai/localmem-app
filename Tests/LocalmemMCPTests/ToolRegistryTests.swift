@@ -403,10 +403,13 @@ struct ToolRegistryTests {
         let identity = MCPClientIdentity(fallback: "test-client")
         let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
 
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        try await store.setAgentStatus(id: "test-client", status: .nonSensitiveOnly)
         _ = try await store.add(
             content: "hidden searchable",
             type: .note,
-            excludedAgents: ["test-client"],
+            folderID: secret.id,
             actorKind: .cli,
             actorID: "user"
         )
@@ -451,10 +454,13 @@ struct ToolRegistryTests {
         let identity = MCPClientIdentity(fallback: "test-client")
         let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
 
+        let secret = try await store.createFolder(name: "Private", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        try await store.setAgentStatus(id: "test-client", status: .nonSensitiveOnly)
         let memory = try await store.add(
             content: "do not edit",
             type: .note,
-            excludedAgents: ["test-client"],
+            folderID: secret.id,
             actorKind: .cli,
             actorID: "user"
         )
@@ -490,18 +496,22 @@ struct ToolRegistryTests {
         let identity = MCPClientIdentity(fallback: "test-client")
         let registry = ToolRegistry(store: store, activityStore: activityStore, identity: identity)
 
+        // A folder this client *can* read: its internals must not leak into results.
+        let folder = try await store.createFolder(name: "Notes", kind: .manual,
+                                                  projectRoot: nil, isSensitive: false)
+        try await store.setAgentStatus(id: "other-client", status: .nonSensitiveOnly)
         _ = try await store.add(
             content: "visible with policy",
             type: .note,
-            excludedAgents: ["other-client"],
+            folderID: folder.id,
             actorKind: .cli,
             actorID: "user"
         )
 
         let text = try await registry.call(name: "memory_recent", arguments: nil).content.firstText
         #expect(text.contains("visible with policy"))
-        #expect(!text.contains("excludedAgents"))
-        #expect(!text.contains("other-client"))
+        #expect(!text.contains("sensitive"))
+        #expect(!text.contains(folder.id.uuidString))
     }
 
     @Test("memory_get retrieves the full verbatim body for a compact result")
