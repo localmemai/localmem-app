@@ -36,17 +36,8 @@ public protocol FactVerifier: Sendable {
 /// The shared verification instruction, so on-device and agent backends judge
 /// by the same rubric.
 public enum VerificationPrompt {
-    public static func build(text: String, candidates: [ExtractedFact],
-                             context: ExtractionContext) -> String {
-        let numbered = candidates.enumerated().map { index, fact in
-            """
-            \(index). title: \(fact.title)
-               content: \(fact.content)
-               type: \(fact.type.rawValue) · tags: \(fact.tags.joined(separator: ", "))
-            """
-        }.joined(separator: "\n")
-
-        return """
+    /// The judging rubric shared by both prompt variants.
+    static let rubric = """
         You are a strict curator of a personal memory store, deciding what \
         deserves to be remembered for years. Below is a source document and a \
         numbered list of candidate memories another pass extracted from it. \
@@ -73,12 +64,28 @@ public enum VerificationPrompt {
         information the candidate did not already carry.
         - "drop" — reject, with a one-line reason. Drop a near-duplicate of a \
         better candidate with a reason like "duplicate of #3".
+        """
+
+    static func numbered(_ candidates: [ExtractedFact]) -> String {
+        candidates.enumerated().map { index, fact in
+            """
+            \(index). title: \(fact.title)
+               content: \(fact.content)
+               type: \(fact.type.rawValue) · tags: \(fact.tags.joined(separator: ", "))
+            """
+        }.joined(separator: "\n")
+    }
+
+    public static func build(text: String, candidates: [ExtractedFact],
+                             context: ExtractionContext) -> String {
+        """
+        \(rubric)
 
         Return ONLY a JSON array (no prose, no markdown code fences) with \
         EXACTLY one entry per candidate, covering every index 0-\(candidates.count - 1):
-        {"index": 0, "verdict": "keep"}
-        {"index": 1, "verdict": "revise", "title": "...", "content": "...", "type": "fact|preference|decision|project|note", "tags": ["..."], "reason": "why it was reshaped"}
-        {"index": 2, "verdict": "drop", "reason": "why"}
+        [{"index": 0, "verdict": "keep"},
+         {"index": 1, "verdict": "revise", "title": "...", "content": "...", "type": "fact|preference|decision|project|note", "tags": ["..."], "reason": "why it was reshaped"},
+         {"index": 2, "verdict": "drop", "reason": "why"}]
 
         Do not use any tools; answer directly.
 
@@ -88,7 +95,31 @@ public enum VerificationPrompt {
         \(text)
 
         CANDIDATES:
-        \(numbered)
+        \(numbered(candidates))
+        """
+    }
+
+    /// Variant for guided generation (the on-device backend): the response
+    /// format is enforced by constrained decoding, so the prompt carries no
+    /// JSON syntax. The document here is the chunk a candidate group was
+    /// assigned to, not the whole file — the on-device context window cannot
+    /// hold full documents.
+    public static func guided(text: String, candidates: [ExtractedFact],
+                              context: ExtractionContext) -> String {
+        """
+        \(rubric)
+
+        Return exactly one verdict per candidate, each carrying the candidate's \
+        index from the CANDIDATES list (0-\(candidates.count - 1)). Only a \
+        "revise" verdict carries a revised fact.
+
+        Source: \(context.sourceName) — \(context.relPath)
+
+        DOCUMENT:
+        \(text)
+
+        CANDIDATES:
+        \(numbered(candidates))
         """
     }
 }
