@@ -1,6 +1,6 @@
 import Foundation
 import LocalmemCore
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
 import FoundationModels
 #endif
 
@@ -18,7 +18,7 @@ enum ConnectorBackends {
 
     /// Whether Apple's on-device model is usable right now.
     static var appleAvailable: Bool {
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
         if #available(macOS 26, *) {
             switch SystemLanguageModel.default.availability {
             case .available: return true
@@ -31,7 +31,7 @@ enum ConnectorBackends {
 
     /// A short reason the on-device model isn't available (for the wizard).
     static var appleUnavailableReason: String {
-        #if canImport(FoundationModels)
+        #if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS
         if #available(macOS 26, *) {
             switch SystemLanguageModel.default.availability {
             case .available: return ""
