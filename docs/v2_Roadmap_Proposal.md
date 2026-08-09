@@ -20,6 +20,10 @@ So v2 is four items, all on the retrieval, write, and organizational path, all i
 
 ## 1. Split Retrieval: Index and Body
 
+> **Status: shipped** (#21). Search/recent return a compact index (no body);
+> `memory_get(ids)` fetches bodies on demand, in request order, and BM25
+> relevance ranking replaced newest-first.
+
 The highest-value, lowest-risk change. Days of work, not weeks.
 
 ### What to Build
@@ -49,6 +53,10 @@ A broad query ("what did we learn about eviction?") returns the 3–5 entries th
 ---
 
 ## 2. Supersession Edges
+
+> **Status: shipped** (#22). Append-only `memory_supersessions` edges via
+> `memory_store`/`memory_update`'s `supersedes` and the `supersede` CLI command;
+> superseded entries are hidden by default and de-ranked under `includeSuperseded`.
 
 ### What to Build
 

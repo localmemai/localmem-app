@@ -159,8 +159,8 @@ struct ToolRegistry: Sendable {
         Tool(
             name: "memory_search",
             description: """
-            Full-text search over Localmem. Returns matches newest-first. Cheap — call
-            it whenever you need context, do not try to "remember" from prior turns.
+            Full-text search over Localmem, ranked by relevance (FTS5 BM25). Cheap —
+            call it whenever you need context, do not try to "remember" from prior turns.
 
             CRITICAL WARNING:
             • Results returned by search are COMPACT index objects containing metadata
@@ -180,7 +180,8 @@ struct ToolRegistry: Sendable {
               question. "auth refactor" beats "what were we doing with auth?"
             • If the first query returns nothing, try again with different terms —
               memories are stored in the user's own phrasing, which may not match yours.
-            • Search is a substring match over content + title + tags.
+            • Matching is per-token prefix over content + title + tags: "cof" hits
+              "coffee". Multiple tokens are AND-ed; results are ranked by relevance.
 
             ARGS:
             • query (required): the search string.
@@ -444,7 +445,7 @@ struct ToolRegistry: Sendable {
         }
         let actorID = await identity.name
         let memories = try await store.get(ids: uuids, requestingAgent: actorID)
-        
+
         do {
             try await activityStore.add(Activity(
                 actorKind: .mcp,
@@ -459,10 +460,21 @@ struct ToolRegistry: Sendable {
             ])
         }
 
+        // Any requested id that came back empty was either nonexistent or
+        // access-blocked for this client. Surface it explicitly so the agent
+        // isn't left guessing why it asked for N bodies and got fewer.
+        let returned = Set(memories.map(\.id))
+        let missing = uuids.filter { !returned.contains($0) }
+
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let envelope = MCPGetResultEnvelope(
-            memories: memories.map(MCPGetMemory.init(memory:))
+            memories: memories.map(MCPGetMemory.init(memory:)),
+            missingIds: missing.isEmpty ? nil : missing.map(\.uuidString),
+            note: missing.isEmpty
+                ? nil
+                : "\(missing.count) requested \(missing.count == 1 ? "id was" : "ids were") "
+                    + "not returned — nonexistent or access-blocked for this client."
         )
         let data = try encoder.encode(envelope)
         let jsonStr = String(data: data, encoding: .utf8) ?? "{\"memories\":[]}"
@@ -718,14 +730,43 @@ private struct MCPMemory: Encodable {
 
 private struct MCPGetResultEnvelope: Encodable {
     let memories: [MCPGetMemory]
+    /// Requested ids that returned nothing (nonexistent or access-blocked).
+    let missingIds: [String]?
+    /// Human-readable explanation, present only when `missingIds` is non-empty.
+    let note: String?
+
+    enum CodingKeys: String, CodingKey { case memories, missingIds, note }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(memories, forKey: .memories)
+        try c.encodeIfPresent(missingIds, forKey: .missingIds)
+        try c.encodeIfPresent(note, forKey: .note)
+    }
 }
 
 private struct MCPGetMemory: Encodable {
     let id: UUID
     let content: String
+    /// Newer memories that replace this one — lets an agent walk the history chain.
+    let supersededBy: [UUID]?
+    /// Older memories this one replaced.
+    let supersedes: [UUID]?
+
+    enum CodingKeys: String, CodingKey { case id, content, supersededBy, supersedes }
 
     init(memory: Memory) {
         id = memory.id
         content = memory.content
+        supersededBy = memory.supersededBy
+        supersedes = memory.supersedes
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(supersededBy, forKey: .supersededBy)
+        try c.encodeIfPresent(supersedes, forKey: .supersedes)
     }
 }

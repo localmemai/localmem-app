@@ -228,10 +228,18 @@ via `MCPClientIdentity` and threads that identity into the store for filtering
 and audit logging.
 
 - `memory_store` — persist a new fact, preference, or decision. Optional `supersedes` parameter versions older entries.
-- `memory_search` — full-text search over stored memories. Returns compact metadata (omits the verbatim `content` body).
-- `memory_recent` — most-recent-first listing. Returns compact metadata (omits the verbatim `content` body).
-- `memory_get` — retrieves the full verbatim body for a set of memory IDs.
-- `memory_update` — replace fields on an existing memory. **Destructive**;
+- `memory_search` — full-text search over stored memories, ranked by relevance
+  (FTS5 BM25). Returns compact metadata (omits the verbatim `content` body).
+  Superseded memories are hidden by default; `includeSuperseded` surfaces them
+  de-ranked below live results.
+- `memory_recent` — most-recent-first listing. Returns compact metadata (omits
+  the verbatim `content` body). Same `includeSuperseded` behavior as search.
+- `memory_get` — retrieves the full verbatim body for a set of memory IDs, in
+  request order, each carrying its `supersededBy` / `supersedes` edges so an
+  agent can walk the history chain. Ids that are unknown or access-blocked are
+  reported back in `missingIds` rather than silently dropped.
+- `memory_update` — replace fields on an existing memory, including its
+  `supersedes` edges (omit to keep, `[]` to clear). **Destructive**;
   deliberately excluded from the pre-authorized tool set so clients prompt on
   each call.
 

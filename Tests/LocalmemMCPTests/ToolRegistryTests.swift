@@ -533,6 +533,60 @@ struct ToolRegistryTests {
         let getText = getResult.content.firstText
         #expect(getText.contains("This is the full secret content that should not be in search results.")) // Body returned!
     }
+
+    @Test("memory_update records supersession edges end to end")
+    func updateRecordsSupersessionEdges() async throws {
+        let (registry, tmp) = try makeRegistry()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let old = try await storeAndExtractID(registry, content: "old fact worth replacing")
+        let new = try await storeAndExtractID(registry, content: "new fact that replaces it")
+
+        // Update carrying only `supersedes` — this used to be a silent no-op.
+        _ = try await registry.call(
+            name: "memory_update",
+            arguments: [
+                "id": .string(new.uuidString),
+                "supersedes": .array([.string(old.uuidString)]),
+            ]
+        )
+
+        // The superseded memory drops out of the default recent view.
+        let recent = try await registry.call(name: "memory_recent", arguments: nil).content.firstText
+        #expect(recent.contains(new.uuidString))
+        #expect(!recent.contains(old.uuidString))
+
+        // memory_get exposes the chain in both directions.
+        let getNew = try await registry.call(
+            name: "memory_get", arguments: ["ids": .array([.string(new.uuidString)])]
+        ).content.firstText
+        #expect(getNew.contains("supersedes"))
+        #expect(getNew.contains(old.uuidString))
+
+        let getOld = try await registry.call(
+            name: "memory_get", arguments: ["ids": .array([.string(old.uuidString)])]
+        ).content.firstText
+        #expect(getOld.contains("supersededBy"))
+        #expect(getOld.contains(new.uuidString))
+    }
+
+    @Test("memory_get reports ids it could not return")
+    func getReportsMissingIds() async throws {
+        let (registry, tmp) = try makeRegistry()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let real = try await storeAndExtractID(registry, content: "a real body")
+        let ghost = UUID()
+
+        let getText = try await registry.call(
+            name: "memory_get",
+            arguments: ["ids": .array([.string(real.uuidString), .string(ghost.uuidString)])]
+        ).content.firstText
+
+        #expect(getText.contains("a real body"))
+        #expect(getText.contains("missingIds"))
+        #expect(getText.contains(ghost.uuidString))
+    }
 }
 
 // MARK: - Test helpers

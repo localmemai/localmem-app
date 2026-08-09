@@ -703,4 +703,107 @@ struct MemoryStoreTests {
         #expect(try await store.memoriesExcluding(agent: "cursor").count == 2)
         #expect(try await store.recent(limit: 10, requestingAgent: "cursor").isEmpty)
     }
+
+    // MARK: - Supersession
+
+    @Test func addSupersedesHidesOldAndDeRanksWhenIncluded() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let old = try await store.add(content: "Old approach: use REST.", type: .decision,
+                                      tags: ["arch"], actorKind: .cli, actorID: "user")
+        let new = try await store.add(content: "New approach: use gRPC.", type: .decision,
+                                      tags: ["arch"], supersedes: [old.id], actorKind: .cli, actorID: "user")
+
+        // The returned superseding memory reflects the edge it created.
+        #expect(new.supersedes == [old.id])
+        // And the superseded memory is flagged as replaced.
+        #expect(try await store.get(id: old.id)?.supersededBy == [new.id])
+
+        // Default recent/search hide the superseded memory.
+        #expect(try await store.recent(limit: 10).map(\.id) == [new.id])
+        #expect(try await store.search(query: "approach").map(\.id) == [new.id])
+
+        // includeSuperseded surfaces it, de-ranked below the live entry.
+        let history = try await store.recent(limit: 10, requestingAgent: nil, includeSuperseded: true)
+        #expect(history.map(\.id) == [new.id, old.id])
+        let searchHistory = try await store.search(query: "approach", limit: 10,
+                                                   requestingAgent: nil, includeSuperseded: true)
+        #expect(searchHistory.map(\.id) == [new.id, old.id])
+    }
+
+    @Test func supersedeMethodLinksAndHides() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let old = try await store.add(content: "first draft", type: .note, actorKind: .cli, actorID: "user")
+        let new = try await store.add(content: "final draft", type: .note, actorKind: .cli, actorID: "user")
+
+        try await store.supersede(supersededID: old.id, supersedingID: new.id, actorKind: .cli)
+
+        #expect(try await store.recent(limit: 10).map(\.id) == [new.id])
+        #expect(try await store.get(id: old.id)?.supersededBy == [new.id])
+        #expect(try await store.get(id: new.id)?.supersedes == [old.id])
+    }
+
+    @Test func supersedeRejectsSelfLink() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let m = try await store.add(content: "x", type: .note, actorKind: .cli, actorID: "user")
+        await #expect(throws: MemoryStoreError.invalidSupersession) {
+            try await store.supersede(supersededID: m.id, supersedingID: m.id, actorKind: .cli)
+        }
+        // The memory stays live — no self-loop was written.
+        #expect(try await store.recent(limit: 10).map(\.id) == [m.id])
+    }
+
+    /// The regression guard for the update-path bug: `supersedes` on `update`
+    /// used to be silently dropped. This asserts it now sets, keeps-on-omit,
+    /// and clears-on-empty — the same omit-vs-replace contract as tags.
+    @Test func updateSetsKeepsAndClearsSupersessionEdges() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let a = try await store.add(content: "A", type: .note, actorKind: .cli, actorID: "user")
+        let b = try await store.add(content: "B", type: .note, actorKind: .cli, actorID: "user")
+        let c = try await store.add(content: "C", type: .note, actorKind: .cli, actorID: "user")
+
+        // All three live to start.
+        #expect(Set(try await store.recent(limit: 10).map(\.id)) == [a.id, b.id, c.id])
+
+        // SET: C supersedes A and B (previously a no-op).
+        _ = try await store.update(id: c.id, content: "C replaces A and B", type: .note,
+                                   supersedes: [a.id, b.id], actorKind: .cli, actorID: "user")
+        #expect(try await store.recent(limit: 10).map(\.id) == [c.id])
+        #expect(Set(try await store.get(id: c.id)?.supersedes ?? []) == [a.id, b.id])
+
+        // KEEP: omitting supersedes on a later edit leaves the edges intact.
+        _ = try await store.update(id: c.id, content: "C v2", type: .note,
+                                   actorKind: .cli, actorID: "user")
+        #expect(try await store.recent(limit: 10).map(\.id) == [c.id])
+        #expect(Set(try await store.get(id: c.id)?.supersedes ?? []) == [a.id, b.id])
+
+        // CLEAR: an explicit empty array drops the edges — A and B go live again.
+        _ = try await store.update(id: c.id, content: "C v3", type: .note,
+                                   supersedes: [], actorKind: .cli, actorID: "user")
+        #expect(Set(try await store.recent(limit: 10).map(\.id)) == [a.id, b.id, c.id])
+        #expect((try await store.get(id: c.id)?.supersedes ?? []).isEmpty)
+    }
+
+    @Test func compactResultsCarryEdgesButNoBody() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let old = try await store.add(content: "superseded body", type: .note, actorKind: .cli, actorID: "user")
+        let new = try await store.add(content: "current body", type: .note,
+                                      headline: "Current headline", supersedes: [old.id],
+                                      actorKind: .cli, actorID: "user")
+
+        let recent = try #require(try await store.recent(limit: 10).first)
+        #expect(recent.id == new.id)
+        #expect(recent.content == "")               // compact index omits the body
+        #expect(recent.headline == "Current headline") // but keeps the index fields
+        #expect(recent.supersedes == [old.id])      // and the edges
+    }
 }

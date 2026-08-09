@@ -47,7 +47,8 @@ public actor MemoryStore {
             content: content,
             tags: tags,
             excludedAgents: normalizedExclusions,
-            source: actorID
+            source: actorID,
+            supersedes: supersedes.isEmpty ? nil : supersedes
         )
         try await database.write { db in
             try db.execute(
@@ -72,7 +73,8 @@ public actor MemoryStore {
                     arguments: [memory.id.uuidString, tag]
                 )
             }
-            for supersededID in supersedes {
+            // Skip a self-link — a memory can never supersede itself.
+            for supersededID in supersedes where supersededID != memory.id {
                 try db.execute(
                     sql: "INSERT OR REPLACE INTO memory_supersessions (superseded_id, superseding_id, created_at) VALUES (?, ?, ?)",
                     arguments: [supersededID.uuidString, memory.id.uuidString, DateFormat.iso8601.string(from: memory.createdAt)]
@@ -172,6 +174,18 @@ public actor MemoryStore {
                 try Self.replaceExclusions(
                     memoryID: id.uuidString,
                     agents: Self.normalizedAgents(excludedAgents),
+                    in: db
+                )
+            }
+
+            // Supersession edges follow the same omit-vs-replace contract as
+            // tags/exclusions: nil keeps the existing history untouched, a
+            // provided array replaces the set this memory supersedes.
+            if let supersedes {
+                try Self.replaceSupersessions(
+                    supersedingID: id.uuidString,
+                    supersededIDs: supersedes,
+                    at: now,
                     in: db
                 )
             }
@@ -291,8 +305,11 @@ public actor MemoryStore {
                 )
             """ : ""
 
+            // Compact index projection — deliberately omits the `content` BLOB so
+            // the list view never pays to read bodies. Callers fetch full text via
+            // `get(ids:)`. Decoded through `Memory(compactRow:)`.
             let sql = """
-                SELECT *, EXISTS (
+                SELECT id, type, title, headline, source, created_at, updated_at, EXISTS (
                     SELECT 1 FROM memory_supersessions WHERE superseded_id = memories.id
                 ) AS is_superseded
                 FROM memories
@@ -338,12 +355,21 @@ public actor MemoryStore {
                     arguments: StatementArguments(idStrings)
                 )
             }
-            return try Self.attachMetadata(rows: rows, in: db, compact: false)
+            // `IN (…)` returns rows in arbitrary order; re-project onto the
+            // caller's id order so results line up with the request. Ids that
+            // were missing or access-blocked simply don't appear (the MCP layer
+            // reports the shortfall to the caller).
+            let memories = try Self.attachMetadata(rows: rows, in: db, compact: false)
+            let byID = Dictionary(memories.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+            return idStrings.compactMap { byID[$0] }
         }
     }
 
     /// Directly links a superseded memory to its superseding successor (append-only history).
     public func supersede(supersededID: UUID, supersedingID: UUID, actorKind: ActorKind, actorID: String? = nil) async throws {
+        guard supersededID != supersedingID else {
+            throw MemoryStoreError.invalidSupersession
+        }
         try await database.write { db in
             let now = Date()
             try db.execute(
@@ -437,9 +463,11 @@ public actor MemoryStore {
             orderedIDs = try String.fetchAll(db, sql: sql, arguments: StatementArguments(args) ?? [])
             guard !orderedIDs.isEmpty else { return [] }
             let placeholders = Self.placeholders(count: orderedIDs.count)
+            // Compact projection — no `content` BLOB (see `recent`). Ranked order
+            // is restored below via `orderedIDs`.
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM memories WHERE id IN (\(placeholders))",
+                sql: "SELECT id, type, title, headline, source, created_at, updated_at FROM memories WHERE id IN (\(placeholders))",
                 arguments: StatementArguments(orderedIDs)
             )
             let memories = try Self.attachMetadata(rows: rows, in: db, compact: true)
@@ -729,17 +757,43 @@ public actor MemoryStore {
         }
         return try rows.compactMap { (row: Row) -> Memory? in
             guard let id: String = row["id"] else { return nil }
-            var memory = try Memory(
+            // Compact rows come from a projection with no `content` column, so
+            // they decode through the content-free initializer; full rows carry
+            // the body BLOB.
+            if compact {
+                return try Memory(
+                    compactRow: row,
+                    tags: tagsByID[id] ?? [],
+                    excludedAgents: exclusionsByID[id] ?? [],
+                    supersededBy: supersededByID[id],
+                    supersedes: supersedesByID[id]
+                )
+            }
+            return try Memory(
                 row: row,
                 tags: tagsByID[id] ?? [],
                 excludedAgents: exclusionsByID[id] ?? [],
                 supersededBy: supersededByID[id],
                 supersedes: supersedesByID[id]
             )
-            if compact {
-                memory.content = ""
-            }
-            return memory
+        }
+    }
+
+    /// Replaces the set of memories that `supersedingID` supersedes: clears the
+    /// existing edges for this superseding memory, then re-inserts the provided
+    /// set. Self-links are skipped. Used by `update` so a correction can
+    /// re-point its history trail.
+    private static func replaceSupersessions(supersedingID: String, supersededIDs: [UUID], at date: Date, in db: Database) throws {
+        try db.execute(
+            sql: "DELETE FROM memory_supersessions WHERE superseding_id = ?",
+            arguments: [supersedingID]
+        )
+        let timestamp = DateFormat.iso8601.string(from: date)
+        for supersededID in supersededIDs where supersededID.uuidString != supersedingID {
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO memory_supersessions (superseded_id, superseding_id, created_at) VALUES (?, ?, ?)",
+                arguments: [supersededID.uuidString, supersedingID, timestamp]
+            )
         }
     }
 
@@ -828,11 +882,45 @@ extension Memory {
             updatedAt: updatedAt
         )
     }
+
+    /// Decodes a compact-index row — a projection that deliberately omits the
+    /// `content` BLOB (search/recent). Content is left empty; callers load
+    /// bodies on demand via `MemoryStore.get(ids:)`.
+    init(compactRow row: Row, tags: [String], excludedAgents: [String], supersededBy: [UUID]? = nil, supersedes: [UUID]? = nil) throws {
+        guard
+            let idString: String = row["id"],
+            let id = UUID(uuidString: idString),
+            let typeString: String = row["type"],
+            let type = MemoryType(rawValue: typeString),
+            let createdAtString: String = row["created_at"],
+            let createdAt = DateFormat.iso8601.date(from: createdAtString),
+            let updatedAtString: String = row["updated_at"],
+            let updatedAt = DateFormat.iso8601.date(from: updatedAtString)
+        else {
+            throw MemoryStoreError.decodingFailed
+        }
+        self.init(
+            id: id,
+            type: type,
+            title: row["title"],
+            headline: row["headline"],
+            content: "",
+            tags: tags,
+            excludedAgents: excludedAgents,
+            source: row["source"],
+            supersededBy: supersededBy,
+            supersedes: supersedes,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
 }
 
 public enum MemoryStoreError: Error {
     case decodingFailed
     case notFound
+    /// A supersession edge pointed a memory at itself.
+    case invalidSupersession
 }
 
 // MARK: - Date formatting
