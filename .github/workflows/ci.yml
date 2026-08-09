@@ -59,7 +59,7 @@ jobs:
         run: swift test --filter LocalmemTests --no-parallel
 
   legacy-macos:
-    name: Build & test (no FoundationModels)
+    name: Build (no FoundationModels)
     # Localmem supports macOS 14/15 and Intel, where Apple's FoundationModels
     # framework is absent. GitHub's older-macOS runners don't ship Swift 6.2, so
     # we can't build on them directly. Instead we force the framework off on the
@@ -67,6 +67,10 @@ jobs:
     # exact same code the older SDK would (every FoundationModels/macOS-26 API is
     # behind `#if canImport(FoundationModels) && !LOCALMEM_NO_FOUNDATION_MODELS`).
     # This guards against an unguarded macOS-26 API breaking the older build.
+    #
+    # Compile-only (`--build-tests` builds test targets too): the flag removes
+    # only the Apple backend, which no test exercises, so re-running the suite
+    # here would add no behavioral coverage over the `build-test` job above.
     runs-on: macos-26
     timeout-minutes: 15
     steps:
@@ -87,6 +91,3 @@ jobs:
 
       - name: Build (FoundationModels disabled)
         run: swift build --build-tests -Xswiftc -DLOCALMEM_NO_FOUNDATION_MODELS
-
-      - name: Test (FoundationModels disabled)
-        run: swift test -Xswiftc -DLOCALMEM_NO_FOUNDATION_MODELS --no-parallel
