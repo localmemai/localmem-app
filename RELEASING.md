@@ -18,23 +18,36 @@ Two things the automation **cannot** check for you. Both are below.
    equal the tag. It exists because the MCP and CLI version silently sat at
    `0.1.0` across three releases.
 
-2. **Write the release notes**, and if the release fixes a security issue, give
-   them a `## Security` heading.
+2. **Write the release notes** in `docs/release-notes/<version>.md` — e.g.
+   `docs/release-notes/2.0.0.md`.
 
-   **Not enforced, and it has to be right.** Nothing in the GitHub API marks a
-   release as security-relevant, so the app's update check reads that heading
-   out of the release body — across *every* release newer than the one a user is
-   running, so a fix in 1.1.0 still reaches someone jumping 1.0.1 → 1.3.0. Omit
-   the heading and those users are told an ordinary update is available, with no
-   indication it matters. There is no way to correct this after the fact for
-   anyone who already saw the dialog.
+   The file's *existence* is enforced: the workflow fails before anything is
+   signed or published if it is missing, because a release cannot be
+   un-published. Its *contents* are on you.
+
+   **Write for the update dialog first.** The app renders this body verbatim in
+   a short scroll area, so roughly the first eight lines are all most people
+   read. Lead with what changed for the user; the generated pull-request list
+   and checksums are appended below and nobody reads that far in a dialog.
+
+   **If the release fixes a security issue, give the notes a `## Security`
+   heading.** Nothing in the GitHub API marks a release as security-relevant, so
+   the update check reads that heading out of the body — across *every* release
+   newer than the one a user is running, so a fix in 1.1.0 still reaches someone
+   jumping 1.0.1 → 1.3.0. Omit it and those users are shown an ordinary update
+   with no indication it matters, and there is no correcting that for anyone who
+   already dismissed the dialog.
 
    The check matches `## Security` or a literal `[security]` marker,
    case-insensitively. It deliberately does *not* match a bare "security fix"
    substring, so notes may say "contains no security fixes" without tripping it.
 
-3. **Sanity-check the release notes render**, since the update dialog shows the
-   raw body text.
+   Reserve it for releases where data was actually at risk. A red banner on
+   something that never exposed anything is how the signal stops meaning
+   anything.
+
+3. **Sanity-check how the notes read as plain text**, since the dialog shows the
+   raw body — no rendered Markdown, no links.
 
 4. **Regenerate the screenshots if the UI moved.**
 
