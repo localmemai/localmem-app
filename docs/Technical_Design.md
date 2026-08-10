@@ -998,13 +998,16 @@ EdDSA key for Sparkle; a Homebrew tap (unless going into homebrew-core).
 - **v1.0 (shipped)** — macOS vault app (SwiftUI), local storage, MCP adapter,
   file connector (§10), signed + notarized DMG via the tag-triggered release
   pipeline (§12).
-- **v2.0 (shipped)** — split retrieval (compact index + `memory_get`, BM25
-  ranking); append-only supersession edges; two-pass extract → verify on the
-  write path (§10); folders with per-folder agent visibility (§8); graceful
-  degradation on older macOS.
-- **next** — version cell in the footer with an opt-in update check and assisted
-  download (§12); vault-level dedup; folder merge/rename ergonomics as
-  auto-created project folders accumulate.
+- **v2.0** — split retrieval (compact index + `memory_get`, BM25 ranking);
+  append-only supersession edges; two-pass extract → verify on the write path
+  (§10); folders with per-folder agent visibility (§8); graceful degradation on
+  older macOS; version cell with an opt-in update check and assisted download
+  (§12). Major rather than minor because the access model was replaced — a
+  per-memory denylist became folders, with a migration — and `memory_search`
+  stopped returning bodies.
+- **next** — vault-level dedup; folder merge/rename ergonomics as auto-created
+  project folders accumulate; recording a denied read as its own audit event
+  rather than reusing `access_filtered`.
 - **later** — optional CloudKit **encrypted** sync; iPhone companion
   (browse/search/capture); additional connectors (Apple Notes, Notion) and
   agent adapters; stronger retrieval and ranking.
