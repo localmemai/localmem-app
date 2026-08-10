@@ -14,7 +14,7 @@ import Foundation
 /// update check reads the heading — omit it and users are never told (§12).
 /// The full checklist is in `RELEASING.md`.
 public enum LocalmemVersion {
-    public static let current = "1.0.1"
+    public static let current = "2.0.0"
 }
 
 /// Component-wise semver comparison helper (§12 of Technical Design).
