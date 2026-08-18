@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import LocalmemCore
 @testable import localmem
 
 @Suite("ClientRegistrar.register routing")
@@ -79,5 +80,33 @@ struct ClientRegistrarTests {
         let r = FileOnlyRegistrar(spy: spy)
         _ = try r.register(binaryPath: "/tmp/x")
         #expect(spy.fileCalls == 1)
+    }
+
+    /// The protocol-extension defaults a minimal registrar inherits. These are
+    /// what a newly added client gets for free, so they have to be the
+    /// conservative answers: claim nothing, support nothing, never report a
+    /// registration or pre-authorization that isn't there.
+    @Test("a registrar declaring only the required members inherits safe defaults")
+    func protocolDefaultsAreConservative() {
+        let r = FileOnlyRegistrar(spy: Spy())
+
+        #expect(r.cliCommand == nil)
+        #expect(!r.isRegistered())
+        #expect(r.registeredBinaryPath() == nil)
+
+        if case .unsupported = try? r.preauthorize(tools: Localmem.preauthorizedToolNames) {} else {
+            Issue.record("expected .unsupported from the default preauthorize")
+        }
+        if case .unsupported = r.preauthorizationState(tools: Localmem.preauthorizedToolNames) {} else {
+            Issue.record("expected .unsupported from the default preauthorizationState")
+        }
+    }
+
+    @Test("the default registerViaCLI refuses rather than silently doing nothing")
+    func defaultCLIRegistrationThrows() {
+        let r = FileOnlyRegistrar(spy: Spy())
+        #expect(throws: SetupError.self) {
+            _ = try r.registerViaCLI(binaryPath: "/tmp/x")
+        }
     }
 }

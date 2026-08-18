@@ -13,8 +13,12 @@ public enum Paths {
     /// Not a supported end-user setting; nothing in the UI surfaces it.
     public static let vaultDirectoryOverrideKey = "LOCALMEM_VAULT_DIR"
 
-    public static func applicationSupportDirectory() throws -> URL {
-        if let override = ProcessInfo.processInfo.environment[vaultDirectoryOverrideKey],
+    /// `environment` is injectable so the override branch is testable without
+    /// mutating the process environment out from under parallel tests.
+    public static func applicationSupportDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URL {
+        if let override = environment[vaultDirectoryOverrideKey],
            !override.isEmpty {
             let dir = URL(fileURLWithPath: (override as NSString).expandingTildeInPath,
                           isDirectory: true)
@@ -32,7 +36,10 @@ public enum Paths {
         return dir
     }
 
-    public static func databaseURL() throws -> URL {
-        try applicationSupportDirectory().appendingPathComponent("localmem.sqlite3")
+    public static func databaseURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URL {
+        try applicationSupportDirectory(environment: environment)
+            .appendingPathComponent("localmem.sqlite3")
     }
 }

@@ -18,12 +18,18 @@ enum ProgressBar {
     ///   [############............]  50%  Registering Antigravity
     static func draw(current: Int, total: Int, label: String) {
         guard isTerminal else { return }
+        FileHandle.standardOutput.write(Data(render(current: current, total: total, label: label).utf8))
+    }
+
+    /// The bar's rendering, separated from the write so it stays exercisable
+    /// off a TTY — under the test runner `draw` short-circuits before it would
+    /// ever compute this.
+    static func render(current: Int, total: Int, label: String) -> String {
         let filled = total > 0 ? min(current * width / total, width) : 0
         let empty = width - filled
         let bar = String(repeating: "#", count: filled) + String(repeating: ".", count: empty)
         let percent = total > 0 ? current * 100 / total : 0
-        let line = "\r[\(bar)] \(String(format: "%3d", percent))%  \(label)\u{001B}[K"
-        FileHandle.standardOutput.write(Data(line.utf8))
+        return "\r[\(bar)] \(String(format: "%3d", percent))%  \(label)\u{001B}[K"
     }
 
     /// Erases the progress line and returns the cursor to its start.

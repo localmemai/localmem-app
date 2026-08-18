@@ -119,6 +119,47 @@ struct SourceStoreTests {
         let (_, store) = try makeStores()
         #expect(try await store.get(id: UUID()) == nil)
     }
+
+    /// `memoryIDs(sourceID:relPath:)` is the per-file view of the link table —
+    /// narrower than `allMemoryIDs`, and what a re-import consults to decide
+    /// which memories one file owns.
+    @Test("memoryIDs returns one file's memories, scoped by both source and path")
+    func memoryIDsAreScopedPerFile() async throws {
+        let (memories, sources) = try makeStores()
+        let source = ImportSource(name: "vault", path: "/tmp/vault", backend: .apple)
+        let other = ImportSource(name: "other", path: "/tmp/other", backend: .apple)
+        try await sources.add(source)
+        try await sources.add(other)
+
+        let a = try await memories.add(content: "from a.md", type: .note, actorKind: .cli, actorID: "user")
+        let b = try await memories.add(content: "also from a.md", type: .note, actorKind: .cli, actorID: "user")
+        let c = try await memories.add(content: "from b.md", type: .note, actorKind: .cli, actorID: "user")
+        let d = try await memories.add(content: "different source", type: .note, actorKind: .cli, actorID: "user")
+
+        try await sources.link(memoryID: a.id, sourceID: source.id, relPath: "a.md")
+        try await sources.link(memoryID: b.id, sourceID: source.id, relPath: "a.md")
+        try await sources.link(memoryID: c.id, sourceID: source.id, relPath: "b.md")
+        try await sources.link(memoryID: d.id, sourceID: other.id, relPath: "a.md")
+
+        let forA = try await sources.memoryIDs(sourceID: source.id, relPath: "a.md")
+        #expect(Set(forA) == Set([a.id, b.id]))
+
+        let forB = try await sources.memoryIDs(sourceID: source.id, relPath: "b.md")
+        #expect(forB == [c.id])
+
+        // Same rel path under a different source is a different file.
+        #expect(try await sources.memoryIDs(sourceID: other.id, relPath: "a.md") == [d.id])
+    }
+
+    @Test("memoryIDs returns nothing for a file with no linked memories")
+    func memoryIDsEmptyForUnknownFile() async throws {
+        let (_, sources) = try makeStores()
+        let source = ImportSource(name: "vault", path: "/tmp/vault", backend: .apple)
+        try await sources.add(source)
+
+        #expect(try await sources.memoryIDs(sourceID: source.id, relPath: "never-imported.md").isEmpty)
+    }
+
 }
 
 @Suite("SourceStore folders")

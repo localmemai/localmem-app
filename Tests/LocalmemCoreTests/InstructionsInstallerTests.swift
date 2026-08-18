@@ -205,4 +205,93 @@ struct InstructionsInstallerTests {
         }
         #expect(FileManager.default.fileExists(atPath: installer.canonicalURL.path))
     }
+
+    // MARK: - removeAll (uninstall)
+
+    /// `removeAll` is the uninstall counterpart to `installAll`: it must clean
+    /// every target it can and report per-target rather than aborting the whole
+    /// sweep on the first target that isn't there.
+    @Test("removeAll reports one result per target and strips every import line")
+    func removeAllStripsEveryTarget() throws {
+        let (installer, tmp) = try makeFixture(existingAgentDirs: [".claude", ".cursor", ".codex", ".gemini"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        _ = try installer.installAll()
+        let results = installer.removeAll()
+
+        #expect(results.count == InstructionsInstaller.defaultTargets.count)
+        #expect(results.map(\.name) == InstructionsInstaller.defaultTargets.map(\.displayName))
+
+        for result in results {
+            guard case .success(let outcome) = result.outcome else {
+                Issue.record("\(result.name): expected success, got \(result.outcome)")
+                continue
+            }
+            guard case .removed = outcome else {
+                Issue.record("\(result.name): expected .removed, got \(outcome)")
+                continue
+            }
+        }
+
+        for target in InstructionsInstaller.defaultTargets {
+            let url = tmp.appendingPathComponent(target.relativePath)
+            guard let contents = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            #expect(!contents.contains("<!-- localmem -->"))
+        }
+    }
+
+    @Test("removeAll on an untouched home reports every target as already absent")
+    func removeAllWithNothingInstalled() throws {
+        let (installer, tmp) = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let results = installer.removeAll()
+        #expect(results.count == InstructionsInstaller.defaultTargets.count)
+        for result in results {
+            guard case .success(let outcome) = result.outcome else {
+                Issue.record("\(result.name): expected success, got \(result.outcome)")
+                continue
+            }
+            if case .removed = outcome {
+                Issue.record("\(result.name): nothing was installed, so nothing should be removed")
+            }
+        }
+    }
+
+    @Test("removeAll is idempotent — a second sweep removes nothing more")
+    func removeAllIsIdempotent() throws {
+        let (installer, tmp) = try makeFixture(existingAgentDirs: [".claude"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        _ = try installer.installAll()
+        _ = installer.removeAll()
+        let second = installer.removeAll()
+
+        for result in second {
+            guard case .success(let outcome) = result.outcome else {
+                Issue.record("\(result.name): expected success, got \(result.outcome)")
+                continue
+            }
+            if case .removed = outcome {
+                Issue.record("\(result.name): the import line was already gone")
+            }
+        }
+    }
+
+    @Test("removeAll honours an explicit target list")
+    func removeAllRespectsTargetSubset() throws {
+        let (installer, tmp) = try makeFixture(existingAgentDirs: [".claude", ".cursor"])
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        _ = try installer.installAll()
+        let claude = AgentInstructionTarget(displayName: "Claude Code", relativePath: ".claude/CLAUDE.md")
+        let results = installer.removeAll(targets: [claude])
+
+        #expect(results.count == 1)
+        #expect(results[0].name == "Claude Code")
+
+        // Cursor was not in the list, so its import line survives.
+        let cursor = try String(contentsOf: tmp.appendingPathComponent(".cursor/AGENTS.md"), encoding: .utf8)
+        #expect(cursor.contains("<!-- localmem -->"))
+    }
 }

@@ -886,4 +886,99 @@ struct MemoryStoreTests {
         #expect(recent.headline == "Current headline") // but keeps the index fields
         #expect(recent.supersedes == [old.id])      // and the edges
     }
+
+    // MARK: - Blocked counts
+
+    /// `blockedRecentCount` / `blockedSearchCount` are how a fully filtered
+    /// read still tells the agent *something* was withheld rather than
+    /// silently returning an empty list. They answer for the window the read
+    /// would have returned — not the whole vault.
+    @Test("blockedRecentCount counts the sensitive rows a restricted agent can't see")
+    func blockedRecentCountsSensitiveRows() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Finance", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "Salary figure", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "Public note", type: .note,
+                                actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        #expect(try await store.blockedRecentCount(requestingAgent: "codex") == 1)
+    }
+
+    @Test("blockedRecentCount is zero for an agent with full access")
+    func blockedRecentCountZeroForOpenAgent() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Finance", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "Salary figure", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+
+        // Unknown agent ids default to full access, so nothing is blocked.
+        #expect(try await store.blockedRecentCount(requestingAgent: "claude-code") == 0)
+        #expect(try await store.blockedRecentCount(requestingAgent: "") == 0)
+        #expect(try await store.blockedRecentCount(requestingAgent: "   ") == 0)
+    }
+
+    /// The count describes the window, not the vault: a limit of 1 can hide at
+    /// most 1 row. Overstating it would make the agent report withholding that
+    /// never applied to its request.
+    @Test("blockedRecentCount never exceeds the requested limit")
+    func blockedRecentCountRespectsLimit() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Finance", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        for index in 0..<5 {
+            _ = try await store.add(content: "secret \(index)", type: .fact, folderID: secret.id,
+                                    actorKind: .cli, actorID: "user")
+        }
+        try await store.setAgentStatus(id: "codex", status: .nonSensitiveOnly)
+
+        #expect(try await store.blockedRecentCount(limit: 1, requestingAgent: "codex") == 1)
+        #expect(try await store.blockedRecentCount(limit: 10, requestingAgent: "codex") == 5)
+    }
+
+    @Test("blockedSearchCount counts only the sensitive rows matching the query")
+    func blockedSearchCountsMatchingSensitiveRows() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Acme", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "Acme pricing terms", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "Acme renewal date", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+        _ = try await store.add(content: "Unrelated sensitive item", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "cursor", status: .nonSensitiveOnly)
+
+        #expect(try await store.blockedSearchCount(query: "Acme", requestingAgent: "cursor") == 2)
+        // A query matching nothing must not claim the folder was withheld.
+        #expect(try await store.blockedSearchCount(query: "kangaroo", requestingAgent: "cursor") == 0)
+    }
+
+    @Test("blockedSearchCount is zero for an empty or unrestricted request")
+    func blockedSearchCountZeroCases() async throws {
+        let (store, url) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secret = try await store.createFolder(name: "Acme", kind: .manual,
+                                                  projectRoot: nil, isSensitive: true)
+        _ = try await store.add(content: "Acme pricing terms", type: .fact, folderID: secret.id,
+                                actorKind: .cli, actorID: "user")
+        try await store.setAgentStatus(id: "cursor", status: .nonSensitiveOnly)
+
+        #expect(try await store.blockedSearchCount(query: "Acme", requestingAgent: "claude-code") == 0)
+        #expect(try await store.blockedSearchCount(query: "Acme", requestingAgent: "") == 0)
+        // A query that sanitizes to nothing can't have blocked anything.
+        #expect(try await store.blockedSearchCount(query: "   ", requestingAgent: "cursor") == 0)
+    }
 }

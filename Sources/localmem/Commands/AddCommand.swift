@@ -48,7 +48,7 @@ struct AddCommand: AsyncParsableCommand {
     /// `folder create` existed with no way to put anything in the folder it
     /// made. Accepts a UUID or a name, matched case-insensitively so
     /// `--folder inbox` works.
-    private func resolveFolderID(_ store: MemoryStore) async throws -> UUID? {
+    func resolveFolderID(_ store: MemoryStore) async throws -> UUID? {
         guard let folder, !folder.isEmpty else { return nil }
         if let uuid = UUID(uuidString: folder) { return uuid }
         let folders = try await store.listFolders()

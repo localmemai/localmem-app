@@ -56,3 +56,37 @@ struct KnownAgentsTests {
         }
     }
 }
+
+/// `Agent.Status` raw values are a persistence contract, not display strings:
+/// they are written into `agents.status` verbatim and read back with
+/// `Status(rawValue:)`. Renaming one silently downgrades every already-stored
+/// row to the default access level.
+@Suite("Agent")
+struct AgentTests {
+
+    @Test("status raw values are the exact strings persisted in the agents table")
+    func statusRawValuesAreStable() {
+        #expect(Agent.Status.all.rawValue == "all")
+        #expect(Agent.Status.nonSensitiveOnly.rawValue == "non_sensitive_only")
+        #expect(Agent.Status(rawValue: "non_sensitive_only") == .nonSensitiveOnly)
+        #expect(Agent.Status(rawValue: "nonSensitiveOnly") == nil)
+    }
+
+    @Test("a new agent defaults to full access")
+    func defaultsToFullAccess() {
+        // Matches the store, which treats an unknown agent id as `all`.
+        #expect(Agent(id: "claude-code").status == .all)
+    }
+
+    @Test("agents are equal by value and round-trip through Codable")
+    func codableRoundTrip() throws {
+        let created = Date(timeIntervalSince1970: 1_700_000_000)
+        let agent = Agent(id: "codex", status: .nonSensitiveOnly, createdAt: created, updatedAt: created)
+
+        let data = try JSONEncoder().encode(agent)
+        let decoded = try JSONDecoder().decode(Agent.self, from: data)
+        #expect(decoded == agent)
+        #expect(decoded.id == "codex")
+        #expect(decoded.status == .nonSensitiveOnly)
+    }
+}

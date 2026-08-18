@@ -39,17 +39,23 @@ struct AgentCommand: AsyncParsableCommand {
         var nonSensitiveOnly: Bool = false
 
         func run() async throws {
+            // Resolved before the store is opened: bad flags are a usage error,
+            // not a reason to touch the database.
+            let status = try resolvedStatus()
             let store = try MemoryStore()
-            let status: Agent.Status
-            if all {
-                status = .all
-            } else if nonSensitiveOnly {
-                status = .nonSensitiveOnly
-            } else {
-                throw ValidationError("Must specify either --all or --non-sensitive-only.")
-            }
             try await store.setAgentStatus(id: id, status: status)
             print("Set status for agent '\(id)' to '\(status.rawValue)'.")
+        }
+
+        /// The two flags are mutually exclusive and one is required; neither
+        /// given is a usage error rather than a silent default.
+        func resolvedStatus() throws -> Agent.Status {
+            if all {
+                return .all
+            } else if nonSensitiveOnly {
+                return .nonSensitiveOnly
+            }
+            throw ValidationError("Must specify either --all or --non-sensitive-only.")
         }
     }
 }

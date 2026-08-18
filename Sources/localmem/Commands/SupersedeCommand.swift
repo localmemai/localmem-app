@@ -25,7 +25,7 @@ struct SupersedeCommand: AsyncParsableCommand {
         print("Linked memory \(oldID.uuidString.prefix(8))... as superseded by \(newID.uuidString.prefix(8))...")
     }
 
-    private func resolve(idOrPrefix: String, store: MemoryStore) async throws -> UUID {
+    func resolve(idOrPrefix: String, store: MemoryStore) async throws -> UUID {
         if let uuid = UUID(uuidString: idOrPrefix) {
             return uuid
         }
