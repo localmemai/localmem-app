@@ -98,4 +98,27 @@ struct ExtractionEvalTests {
         // Every fixture carries its document text.
         #expect(fixtures.allSatisfy { !$0.text.isEmpty })
     }
+
+    // MARK: Metric rates
+
+    @Test("the three rates divide by the right denominator")
+    func metricRates() {
+        let m = EvalMetrics(expectedCount: 4, actualCount: 10, junkKept: 3, goodLost: 1, duplicates: 2)
+        #expect(m.junkKeptRate == 0.3)      // junk over what was stored
+        #expect(m.goodLostRate == 0.25)     // loss over what was expected
+        #expect(m.duplicateRate == 0.2)     // dupes over what was stored
+    }
+
+    @Test("an empty run reports zero rates rather than dividing by zero")
+    func metricRatesGuardEmptyRuns() {
+        let empty = EvalMetrics(expectedCount: 0, actualCount: 0, junkKept: 0, goodLost: 0, duplicates: 0)
+        #expect(empty.junkKeptRate == 0)
+        #expect(empty.goodLostRate == 0)
+        #expect(empty.duplicateRate == 0)
+
+        // Nothing stored, but memories were expected: everything was lost.
+        let allLost = EvalMetrics(expectedCount: 3, actualCount: 0, junkKept: 0, goodLost: 3, duplicates: 0)
+        #expect(allLost.duplicateRate == 0)
+        #expect(allLost.goodLostRate == 1)
+    }
 }

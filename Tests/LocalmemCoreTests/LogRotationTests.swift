@@ -77,4 +77,25 @@ struct LogRotationTests {
         #expect(try String(contentsOf: two, encoding: .utf8) == "bbbbb\n")
         #expect(!FileManager.default.fileExists(atPath: three.path))
     }
+
+    /// A log sink that cannot be written to must never take the process down
+    /// with it — logging is a side channel. The failure is reported to OSLog
+    /// once and then swallowed, so a full disk or a bad path degrades to
+    /// silence rather than a crash on every subsequent line.
+    @Test("an unwritable destination degrades to silence instead of throwing")
+    func unwritableDirectoryIsSwallowed() throws {
+        // A regular file where the log directory should be: createDirectory
+        // fails for every write.
+        let blocker = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        try Data("not a directory".utf8).write(to: blocker)
+
+        let handler = RotatingFileLogHandler(directory: blocker)
+        handler.write("first\n")
+        handler.write("second\n")   // exercises the report-once latch
+
+        // The blocker is untouched and nothing was created beneath it.
+        #expect(try String(contentsOf: blocker, encoding: .utf8) == "not a directory")
+    }
 }
