@@ -315,6 +315,12 @@ public actor MemoryStore {
             let supersessionFilter = includeSuperseded
                 ? ""
                 : "AND NOT EXISTS (SELECT 1 FROM memory_supersessions WHERE superseded_id = memories.id)"
+            // Sorting on the computed `is_superseded` costs a full scan and a
+            // temp B-tree, because no index can satisfy a correlated-subquery
+            // leading sort term. When superseded rows are excluded above the
+            // value is provably 0 for every row, so it orders nothing — dropping
+            // it lets idx_memories_created_at serve the query.
+            let supersededSort = includeSuperseded ? "is_superseded ASC, " : ""
             
             // How many of the rows this caller *would* have seen were held
             // back. Scoped to the same top-`limit` window the query returns —
@@ -349,7 +355,7 @@ public actor MemoryStore {
                 JOIN folders ON memories.folder_id = folders.id
                 WHERE (folders.sensitive = 0 OR ? = 'all')
                 \(supersessionFilter)
-                ORDER BY is_superseded ASC, memories.created_at DESC, memories.rowid DESC
+                ORDER BY \(supersededSort)memories.created_at DESC, memories.rowid DESC
                 LIMIT ?
                 """
             
@@ -503,6 +509,8 @@ public actor MemoryStore {
             let supersessionFilter = includeSuperseded
                 ? ""
                 : "AND NOT EXISTS (SELECT 1 FROM memory_supersessions WHERE superseded_id = memories_fts.memory_id)"
+            // See `recent` — the same computed sort key, the same wasted scan.
+            let supersededSort = includeSuperseded ? "is_superseded ASC, " : ""
             
             // Scoped to the same top-`limit` window as the query below, and
             // skipped entirely for unrestricted callers — see `recent`.
@@ -537,7 +545,7 @@ public actor MemoryStore {
                 WHERE memories_fts MATCH ?
                   AND (folders.sensitive = 0 OR ? = 'all')
                 \(supersessionFilter)
-                ORDER BY is_superseded ASC, rank
+                ORDER BY \(supersededSort)rank
                 LIMIT ?
                 """
             
@@ -1173,6 +1181,20 @@ extension MemoryStore {
     }
     
     public func resolveProjectFolder(gitRoot: String) async throws -> Folder {
+        // Overwhelmingly the folder already exists, and that path took the
+        // cross-process write lock purely to read one row — so a single
+        // `memory_store` claimed the write lock at least twice, once here and
+        // once for its audit row. The lookup is served by the unique index on
+        // project_root, so try it as a read and fall through to a write only
+        // when the folder has to be created. The write below repeats the lookup
+        // because another process may have created it in between.
+        if let existing = try await database.read({ db in
+            try Row.fetchOne(db, sql: "SELECT * FROM folders WHERE project_root = ?", arguments: [gitRoot])
+                .map(Folder.init(row:))
+        }) {
+            return existing
+        }
+
         return try await database.write { db in
             if let row = try Row.fetchOne(db, sql: "SELECT * FROM folders WHERE project_root = ?", arguments: [gitRoot]) {
                 return try Folder(row: row)

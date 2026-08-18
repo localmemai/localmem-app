@@ -11,28 +11,59 @@ import LocalmemCore
 /// and stdout. `UpdateChecker` is `@MainActor`, and `waitUntilExit()` blocks the
 /// calling thread — doing that inline froze the UI for the duration of both
 /// `spctl` and `hdiutil`.
-private func runTool(_ path: String, _ arguments: [String]) async -> (status: Int32, output: Data) {
+private func runTool(_ path: String, _ arguments: [String]) async -> (status: Int32, output: Data, errorText: String) {
     await withCheckedContinuation { continuation in
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = arguments
             let stdout = Pipe()
+            let stderr = Pipe()
             process.standardOutput = stdout
-            process.standardError = Pipe()
+            process.standardError = stderr
             do {
                 try process.run()
             } catch {
-                continuation.resume(returning: (-1, Data()))
+                continuation.resume(returning: (-1, Data(), ""))
                 return
             }
-            // Drain before waiting: a full pipe buffer would deadlock the child.
+            // Drain both before waiting: a full pipe buffer would deadlock the
+            // child. stderr is kept separate rather than merged because
+            // `hdiutil -plist` output has to stay parseable, while `codesign -d`
+            // reports everything we need on stderr.
             let data = stdout.fileHandleForReading.readDataToEndOfFile()
+            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            continuation.resume(returning: (process.terminationStatus, data))
+            continuation.resume(returning: (process.terminationStatus, data,
+                                            String(decoding: errData, as: UTF8.self)))
         }
     }
 }
+
+/// The Team ID the running copy of Localmem is signed with, or nil when it is
+/// unsigned — a local `swift run` build, typically.
+///
+/// Used to pin update verification to *our own* identity rather than a
+/// hardcoded constant: notarization proves an image came from *an* Apple
+/// developer, not from us. Deriving it this way also means a fork signed with a
+/// different certificate pins to itself without editing any code.
+private func runningTeamIdentifier() async -> String? {
+    let result = await runTool("/usr/bin/codesign",
+                               ["-d", "--verbose=4", Bundle.main.bundlePath])
+    guard result.status == 0 else { return nil }
+    for line in result.errorText.split(separator: "\n") where line.hasPrefix("TeamIdentifier=") {
+        let value = line.dropFirst("TeamIdentifier=".count).trimmingCharacters(in: .whitespaces)
+        return (value.isEmpty || value == "not set") ? nil : value
+    }
+    return nil
+}
+
+/// Hosts a release asset may be fetched from.
+///
+/// `browser_download_url` arrives from the API response, so treating it as a
+/// trusted URL means whoever can influence that JSON chooses where the app
+/// downloads an executable from.
+private let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
 
 /// Forwards `URLSession` download progress. The async `download(from:delegate:)`
 /// reports byte counts only through a delegate, and the alternative — moving the
@@ -190,6 +221,14 @@ public final class UpdateChecker {
             openReleasePage(release)
             return
         }
+        // Where the asset lives is not the release JSON's decision to make.
+        guard downloadURL.scheme == "https",
+              let host = downloadURL.host, allowedDownloadHosts.contains(host) else {
+            downloadError = "This release points its download somewhere unexpected. "
+                          + "Download Localmem from the releases page instead."
+            openReleasePage(release)
+            return
+        }
 
         isDownloading = true
         downloadedBytes = 0
@@ -220,6 +259,26 @@ public final class UpdateChecker {
             // this check while the UI says "verified" is worse than not
             // checking at all. On failure the image is destroyed and there is
             // no way to proceed.
+            // `spctl` answers "is this signed and notarized", not "by whom".
+            // Any image from any Apple developer account passes it, so pin the
+            // identity too — otherwise an attacker who can influence the
+            // release JSON supplies their own notarized image and the UI calls
+            // it verified. Skipped only when we cannot read our own Team ID,
+            // i.e. an unsigned local build, where there is nothing to pin to.
+            if let teamID = await runningTeamIdentifier() {
+                let requirement = "anchor apple generic and certificate leaf[subject.OU] = \(teamID)"
+                let pinned = await runTool("/usr/bin/codesign",
+                                           ["--verify", "-R", "=\(requirement)", destination.path])
+                guard pinned.status == 0 else {
+                    try? FileManager.default.removeItem(at: destination)
+                    downloadedImagePath = nil
+                    isDownloading = false
+                    downloadError = "The downloaded update is not signed by Localmem and was discarded. "
+                                  + "Download Localmem again from the releases page."
+                    return
+                }
+            }
+
             let verify = await runTool("/usr/sbin/spctl",
                                        ["-a", "-t", "open", "--context", "context:primary-signature", destination.path])
             guard verify.status == 0 else {

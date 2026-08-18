@@ -369,6 +369,13 @@ struct ToolRegistry: Sendable {
     // for the same reason as content — an unbounded title inflates every search
     // and recent payload returned to agents.
     private static let maxTitleBytes = 512
+    /// The tool description has always promised "max 120 chars"; nothing
+    /// enforced it. An oversized headline is worse than an oversized title:
+    /// headlines ride along in every compact `memory_search` and
+    /// `memory_recent` payload, so one bad write inflates the retrieval path
+    /// that split retrieval exists to keep small — permanently, for every
+    /// client. Bytes rather than characters, matching the title check.
+    private static let maxHeadlineBytes = 480
     private static let maxTagCount = 16
     private static let maxTagLength = 64
 
@@ -381,6 +388,16 @@ struct ToolRegistry: Sendable {
         guard title.utf8.count <= maxTitleBytes else {
             throw MCPError.invalidParams(
                 "`title` is \(title.utf8.count) bytes; max is \(maxTitleBytes). Titles are short noun phrases."
+            )
+        }
+    }
+
+    private static func validateHeadlineLength(_ headline: String?) throws {
+        guard let headline else { return }
+        guard headline.utf8.count <= maxHeadlineBytes else {
+            throw MCPError.invalidParams(
+                "`headline` is \(headline.utf8.count) bytes; max is \(maxHeadlineBytes). "
+                + "Headlines are one-line summaries — around 120 characters."
             )
         }
     }
@@ -413,6 +430,7 @@ struct ToolRegistry: Sendable {
         }
         let title = args["title"]?.stringValue
         try Self.validateTitleLength(title)
+        try Self.validateHeadlineLength(args["headline"]?.stringValue)
 
         let typeRaw = args["type"]?.stringValue ?? "note"
         guard let type = MemoryType(rawValue: typeRaw) else {
@@ -468,10 +486,17 @@ struct ToolRegistry: Sendable {
         guard let idsValue = args["ids"]?.arrayValue else {
             throw MCPError.invalidParams("`ids` is required and must be an array of UUID strings.")
         }
-        let uuids = idsValue.compactMap { $0.stringValue }.compactMap { UUID(uuidString: $0) }
-        guard !uuids.isEmpty else {
+        let requested = idsValue.compactMap { $0.stringValue }.compactMap { UUID(uuidString: $0) }
+        guard !requested.isEmpty else {
             throw MCPError.invalidParams("`ids` must contain at least one valid UUID string.")
         }
+        // The only handler that used to cap nothing, while every other path
+        // clamps to `maxLimit`. Bodies run to 64 KB each, so a few thousand ids
+        // is a multi-hundred-megabyte response built while holding a read; past
+        // SQLite's bound-parameter ceiling `get(ids:)` fails outright instead,
+        // since it binds one placeholder per id. Truncation is reported through
+        // the `missingIds` note below rather than silently.
+        let uuids = Array(requested.prefix(Self.maxLimit))
         let actorID = await identity.name
         let memories = try await store.get(ids: uuids, requestingAgent: actorID)
 
@@ -493,7 +518,8 @@ struct ToolRegistry: Sendable {
         // access-blocked for this client. Surface it explicitly so the agent
         // isn't left guessing why it asked for N bodies and got fewer.
         let returned = Set(memories.map(\.id))
-        let missing = uuids.filter { !returned.contains($0) }
+        let missing = requested.filter { !returned.contains($0) }
+        let overflow = requested.count - uuids.count
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -504,6 +530,9 @@ struct ToolRegistry: Sendable {
                 ? nil
                 : "\(missing.count) requested \(missing.count == 1 ? "id was" : "ids were") "
                     + "not returned — nonexistent or access-blocked for this client."
+                    + (overflow > 0
+                        ? " \(overflow) were beyond the \(Self.maxLimit)-id limit; request them in a follow-up call."
+                        : "")
         )
         let data = try encoder.encode(envelope)
         let jsonStr = String(data: data, encoding: .utf8) ?? "{\"memories\":[]}"
@@ -615,6 +644,7 @@ struct ToolRegistry: Sendable {
 
         let headline: String?
         if let rawHeadline = args["headline"]?.stringValue {
+            try Self.validateHeadlineLength(rawHeadline)
             headline = rawHeadline
         } else if args["content"] != nil {
             headline = nil

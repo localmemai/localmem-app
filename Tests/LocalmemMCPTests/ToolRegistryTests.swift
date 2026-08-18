@@ -482,6 +482,71 @@ struct ToolRegistryTests {
         #expect(filtered.allSatisfy { Activity.blockedOperations.contains($0.operation) })
     }
 
+    /// The tool description promised "max 120 chars" and nothing enforced it.
+    /// Headlines ride along in every compact search and recent payload, so one
+    /// oversized write inflates the retrieval path permanently, for every
+    /// client — the opposite of what split retrieval exists for.
+    @Test("Oversized headlines are rejected on store and update")
+    func headlineLengthIsValidated() async throws {
+        let (registry, url) = try makeRegistry()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let huge = String(repeating: "x", count: 5_000)
+        await #expect(throws: MCPError.self) {
+            _ = try await registry.call(name: "memory_store", arguments: [
+                "content": .string("a fact"),
+                "headline": .string(huge),
+            ])
+        }
+
+        // A reasonable headline still goes through.
+        let stored = try await registry.call(name: "memory_store", arguments: [
+            "content": .string("a fact"),
+            "headline": .string("A short one-line summary"),
+        ]).content.firstText
+        #expect(stored.contains("id"))
+
+        // And the update path is guarded too, not just the store path.
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: Data(stored.utf8)) as? [String: Any])
+        let id = try #require(json["id"] as? String)
+
+        // Prove the id is good before asserting a rejection, so the throw below
+        // cannot be a bad-id error masquerading as headline validation.
+        _ = try await registry.call(name: "memory_update", arguments: [
+            "id": .string(id),
+            "headline": .string("Still short"),
+        ])
+
+        await #expect(throws: MCPError.self) {
+            _ = try await registry.call(name: "memory_update", arguments: [
+                "id": .string(id),
+                "headline": .string(huge),
+            ])
+        }
+    }
+
+    /// Every other handler clamps through `clampLimit`; this one capped
+    /// nothing, so a few thousand ids meant a multi-hundred-megabyte response —
+    /// or a hard SQLite error past its bound-parameter ceiling.
+    @Test("memory_get clamps the ids array and says it truncated")
+    func getClampsIDs() async throws {
+        let (registry, url) = try makeRegistry()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var ids: [Value] = []
+        for _ in 0..<200 { ids.append(.string(UUID().uuidString)) }
+
+        let result = try await registry.call(
+            name: "memory_get",
+            arguments: ["ids": .array(ids)]
+        ).content.firstText
+
+        // 200 requested, 50 fetched, and the overflow reported rather than
+        // silently dropped.
+        #expect(result.contains("beyond the 50-id limit"))
+    }
+
     @Test("MCP update cannot edit a memory excluded for the client")
     func updateDeniedForExcludedMemory() async throws {
         let tmp = FileManager.default.temporaryDirectory
