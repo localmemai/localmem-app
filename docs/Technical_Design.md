@@ -339,6 +339,21 @@ its own. Moving a memory between folders *is* how it is reclassified — so ther
 is no per-memory override and no inherited-versus-explicit distinction to
 reconcile.
 
+**What this control is, and is not.** It governs what the MCP server *serves*
+to an agent that identifies itself in the normal way. It is not a security
+boundary: the client id comes from `clientInfo.name` in the initialize
+handshake and is not verified, and a process running as the user can read
+`localmem.sqlite3` directly regardless of any status set here. Treat it as
+deciding what a cooperating tool sees, not as a defence against a hostile one —
+and never describe it in user-facing copy as an agent being unable to read
+something.
+
+**New agents start unrestricted**, deliberately. An id with no row in `agents`
+resolves to `all`, so connecting a tool never silently locks it out of a vault
+the user expected it to use. The cost is that restriction is per-agent opt-in
+and does not extend to agents installed later; that trade is chosen, not
+overlooked.
+
 **The destination's rule always wins**, in both directions, for a single memory
 and for a whole folder merged into another. A move never rewrites the
 destination's own setting: doing so would change visibility for memories already

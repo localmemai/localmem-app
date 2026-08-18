@@ -14,10 +14,35 @@ public enum ProcessUtility {
     /// from an actor, and waiting on `DispatchGroup` from a Swift-concurrency
     /// cooperative thread while depending on global-queue work items starves the
     /// pool and deadlocks under load.
+    /// Memoized per parent pid for the life of the server.
+    ///
+    /// This probe forks `lsof` and then walks parent directories looking for a
+    /// `.git`, which is tens to hundreds of milliseconds on a busy machine — and
+    /// it ran on *every* `memory_store` without an explicit project root. The
+    /// parent of an MCP session is a single client process whose working
+    /// directory does not change for as long as that session lives, so the
+    /// answer is stable. A `nil` result is cached too: repeatedly re-paying for
+    /// a probe that already failed is the case worth avoiding most, and a miss
+    /// is harmless — the memory lands in Inbox.
+    private static let cwdCache = CWDCache()
+
+    private actor CWDCache {
+        private var byPPID: [pid_t: String?] = [:]
+
+        func cwd(for ppid: pid_t, probe: @Sendable () async -> String?) async -> String? {
+            if let cached = byPPID[ppid] { return cached }
+            let value = await probe()
+            byPPID[ppid] = value
+            return value
+        }
+    }
+
     public static func getParentCWD() async -> String? {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                cont.resume(returning: probeParentCWD())
+        await cwdCache.cwd(for: getppid()) {
+            await withCheckedContinuation { cont in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    cont.resume(returning: probeParentCWD())
+                }
             }
         }
     }

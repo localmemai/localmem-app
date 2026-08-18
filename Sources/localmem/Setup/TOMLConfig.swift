@@ -30,7 +30,14 @@ enum TOMLConfig {
 
         let tempURL = url.deletingLastPathComponent()
             .appendingPathComponent(".\(url.lastPathComponent).tmp")
+        // 0600 on the temp file, which `replaceItemAt` carries across when the
+        // destination is new. These configs routinely hold API keys for other
+        // MCP servers, so a file Localmem creates from scratch must not land at
+        // the default 0644 and become readable by other local accounts. An
+        // existing file keeps its own attributes through the replace.
         try nextText.write(to: tempURL, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                              ofItemAtPath: tempURL.path)
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
         return true
     }
